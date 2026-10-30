@@ -112,6 +112,7 @@ def main():
                 # Require consecutive samples of near-zero angular acceleration.
                 if abs(wdot) < stop_threshold:
                     saturated_samples += 1
+                    
                 else:
                     saturated_samples = 0
 
