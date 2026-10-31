@@ -164,6 +164,7 @@ def main():
     print(f"Inertia J is:{average_J}")
     print(f"Viscous frictionb:{b}")
     print(f"Coulomb friction torque:{Fs}")
+    print("test completed")
 
 
 if __name__ == "__main__":
