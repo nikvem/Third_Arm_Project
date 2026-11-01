@@ -20,7 +20,7 @@ import re
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
 OUTPUT_FILE = "motor_parameter_estimate.csv"
-MIN_SAMPLES_PER_CYCLE = 10
+MIN_SAMPLES_PER_CYCLE = 5
 def read_experiment_csv(path):
     """Read and validate time, speed, and commanded torque from one CSV."""
     samples = []

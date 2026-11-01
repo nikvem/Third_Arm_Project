@@ -14,11 +14,11 @@ import matplotlib.pyplot as plt
 
 ############ INPUTS ############
 
-motorID = 1             # CAN ID of motor
-motorKT = 1.22          # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
+motorID =1             # CAN ID of motor
+motorKT = 0.94          # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
 timestep = 0.02          # Loop period, s
 
-torque_cmd = 0.3          # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
+torque_cmd = 0.01          # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
 
 start_threshold = 0.01     # |omega| above which logging begins
 stop_threshold = 0.01      # Filtered |omega_dot| below which motion is considered saturated
@@ -49,10 +49,17 @@ def main():
     os.makedirs(result_dir, exist_ok=True)
     cycle_number = next_cycle_number(result_dir)
 
-    bus_cm = can.Bus()
+    bus_cm = can.Bus(
+        interface="gs_usb",
+        channel=0,
+        bitrate=1000000
+    )
 
     with bus_cm as bus:
-        rs_client = None
+        rs_client = robstride.Client(
+            bus,
+            host_can_id=0xAA
+        )
 
         # Logging arrays
         t_log = [] # time logging
