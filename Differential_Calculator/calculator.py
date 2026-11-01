@@ -1,4 +1,7 @@
-#Initial differential calculator for J5 & J6
+# Initial differential calculator for J5 & J6
+# Reference: zero is the shaft straight with the forearm, positive pitch is up, 
+# and positive roll is clockwise (looking from the wrist tip toward the forearm)
+
 import math
 
 J5_SIGN = 1
@@ -7,8 +10,11 @@ J6_SIGN = 1
 J5_ZERO = 0
 J6_ZERO = 0
 
+PULLEY_RATIO = 2  # To account for the gear ratio
+
+
 def calculate(roll, pitch, roll_torque, pitch_torque):
-    # Note: All angles are in degrees and torques are in N·m.
+    # Angles are in degrees; torques are in N·m.
     if not all(math.isfinite(x) for x in (roll, pitch, roll_torque, pitch_torque)):
         raise ValueError("Enter finite numbers only.")
 
@@ -18,13 +24,13 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
     if J5_SIGN not in (-1, 1) or J6_SIGN not in (-1, 1):
         raise ValueError("Motor signs must be 1 or -1.")
 
-    # Convert the wrist angles into motor angles.
-    j5_angle = J5_ZERO + J5_SIGN * (roll + pitch)
-    j6_angle = J6_ZERO + J6_SIGN * (roll - pitch)
+    # Convert the wrist angles into motor angles, including the pulley ratio
+    j5_angle = J5_ZERO + J5_SIGN * PULLEY_RATIO * (roll + pitch)
+    j6_angle = J6_ZERO + J6_SIGN * PULLEY_RATIO * (roll - pitch)
 
-    # Split the wrist torques between the two motors.
-    j5_torque = J5_SIGN * (roll_torque + pitch_torque) / 2
-    j6_torque = J6_SIGN * (roll_torque - pitch_torque) / 2
+    # Split the wrist torques between the two motors and account for gear ratio
+    j5_torque = J5_SIGN * (roll_torque + pitch_torque) / 2 / PULLEY_RATIO
+    j6_torque = J6_SIGN * (roll_torque - pitch_torque) / 2 / PULLEY_RATIO
 
     return j5_angle, j6_angle, j5_torque, j6_torque
 
@@ -33,10 +39,10 @@ if __name__ == "__main__":
     print("Wrist differential calculator")
 
     try:
-        roll = float(input("Input Roll angle (degrees): "))
-        pitch = float(input("Input Pitch angle (degrees): "))
-        roll_torque = float(input("Input Roll torque (N·m): "))
-        pitch_torque = float(input("Input Pitch torque (N·m): "))
+        roll = float(input("Input roll angle (degrees): "))
+        pitch = float(input("Input pitch angle (degrees): "))
+        roll_torque = float(input("Input roll torque (N·m): "))
+        pitch_torque = float(input("Input pitch torque (N·m): "))
 
         a5, a6, t5, t6 = calculate(roll, pitch, roll_torque, pitch_torque)
 
