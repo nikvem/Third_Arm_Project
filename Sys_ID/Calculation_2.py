@@ -1,26 +1,25 @@
-"""
-The new calculation2.py, using the System ID instead of linear regression to find J, b, F
+"""Estimate b and Coulomb friction from steady speeds, then J from transients.
 
-tau_in = J*alpha + b*omega+F_s * omega_sign
-finding the data point where alpha = 0, and set the figure out b and F_s using linear regression
-collecting many omega value under different tau_in, need at least 20 for the positive and 20 for the negative. 
-using linear regression to calculate gradient which is b, and y=intercept which is Fs
-Then using exponential interpolation to find inertia, average the inertia for each expeirment cycle.
-exponential interpolation w(t)= \frac{tau_in-Fs}{b} \cdot (1-e^{\frac{-bt}{J}})
+    tau_in = J * alpha + b * omega + F_c * sign(omega)
+    omega(t) = omega_inf * (1 - exp(-b * t / J))
+
+Exponential regression fits log(1 - omega / omega_inf) = slope*t,
+where omega_inf = (tau_in - F_s) / b and J = -b / slope.
+Fit each rotation direction separately, then use the equal-weight mean of
+the two b values and the two absolute friction intercepts for all transients.
+The final J is the arithmetic mean of the valid per-cycle estimates.
 """
 
 
 import os
-import robstride
 import numpy as np 
 import math
 import csv
-import statistics
 import re
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
-OUTPUT_FILE = "motor_parameter_estimate.csv"
 MIN_SAMPLES_PER_CYCLE = 5
+REGRESSION_START_TIME_S = 1.0
 def read_experiment_csv(path):
     """Read and validate time, speed, and commanded torque from one CSV."""
     samples = []
@@ -47,38 +46,50 @@ def read_experiment_csv(path):
 
 
 
-#finding the location where alpha close to 0 and recording that omega at that position. Doing the linear regression
 def bF_calculation(omega_static: list, tau_in: list):
-    omega_plot = np.array(omega_static)
-    tau_plot = np.array(tau_in)
-    design = np.column_stack((omega_plot, np.sign(omega_plot)))
-    coefficients, _, rank, _ = np.linalg.lstsq(design, tau_in, rcond=None)
-    if rank < 2:
-        raise ValueError("Need the steady state measurement at different speed magnitude")
-    b =float(coefficients[0])
-    F_s = float(coefficients[1])
-    return b,F_s
+    """Average directional slopes and absolute intercepts, weighting sides equally."""
+    omega_plot = np.asarray(omega_static, dtype=float)
+    torque = np.asarray(tau_in, dtype=float)
+    if omega_plot.ndim != 1 or torque.shape != omega_plot.shape:
+        raise ValueError("Provide matching one-dimensional speed and torque lists")
+    if not np.all(np.isfinite(omega_plot)) or not np.all(np.isfinite(torque)):
+        raise ValueError("Steady speeds and torques must be finite")
 
-def exponential_interpolation(samples, b, F_s):
-    """Fit one constant-torque cycle and return inertia J in kg*m^2.
+    slopes = []
+    friction_magnitudes = []
+    for direction, label in ((1, "positive"), (-1, "negative")):
+        selected = omega_plot * direction > 0
+        speeds = omega_plot[selected]
+        if len(speeds) < 2:
+            raise ValueError(f"Need at least two steady-speed measurements for {label} rotation")
+        # Fit tau = b_direction * omega + signed friction intercept.
+        design = np.column_stack((speeds, np.ones_like(speeds)))
+        coefficients, _, rank, _ = np.linalg.lstsq(design, torque[selected], rcond=None)
+        if rank < 2:
+            raise ValueError(f"Need distinct steady speeds for {label} rotation")
+        b_direction, friction_intercept = map(float, coefficients)
+        if not np.isfinite(b_direction) or b_direction <= 0:
+            raise ValueError(f"The {label} rotation fit must produce a positive finite b")
+        if not np.isfinite(friction_intercept):
+            raise ValueError(f"The {label} rotation fit must produce finite friction")
+        slopes.append(b_direction)
+        friction_magnitudes.append(abs(friction_intercept))
 
-    samples contains (time_s, omega_rad_s, torque_input) tuples.
-    b is the positive viscous coefficient. F_s is the signed intercept
-    from tau = b * omega + F_s, fitted for this rotation direction.
+    return float(np.mean(slopes)), float(np.mean(friction_magnitudes))
 
-    Fit J directly in omega(t) = ((tau_in - F_s) / b) * (1 - exp(-b*t/J)).
-    This assumes zero speed at torque application. Sample times must be
-    elapsed seconds since torque application, not since the first reading.
-    """
-    #this is the fitting function we used
-    from scipy.optimize import curve_fit
-    #some checking towards the data
+def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S):
+
     data = np.asarray(samples, dtype=float)
     if data.ndim != 2 or data.shape[1] != 3 or len(data) < 3:
         raise ValueError("Provide at least three (time, omega, torque) samples")
+    if not np.all(np.isfinite(data)):
+        raise ValueError("Samples must contain only finite values")
     if not np.isfinite(b) or b <= 0 or not np.isfinite(F_s):
         raise ValueError("b must be positive and finite; F_s must be finite")
-    #extracted the data in the column of time, omega and tau_in
+
+    if not np.isfinite(start_time_s) or start_time_s < 0:
+        raise ValueError("Regression start time must be nonnegative and finite")
+
     time_s = data[:, 0]
     omega = data[:, 1]
     tau_in = data[0, 2]
@@ -86,38 +97,36 @@ def exponential_interpolation(samples, b, F_s):
         raise ValueError("Sample times must be nonnegative and strictly increasing")
     if not np.allclose(data[:, 2], tau_in, rtol=1e-6, atol=1e-9):
         raise ValueError("The exponential model requires constant input torque")
-    
-    #infinite omega value
+
     omega_inf = (tau_in - F_s) / b
     if abs(omega_inf) <= 1e-12 or np.ptp(omega) <= 1e-12:
         raise ValueError("A changing-speed transient is needed to estimate J")
-    if omega[-1] * omega_inf <= 0:
+    if omega[-1] * omega_inf <= 0 or np.any(omega * omega_inf < 0):
         raise ValueError("Recorded rotation disagrees with the predicted steady speed")
-    #This is our equation
-    def exponential_response(t, J):
-        return ((tau_in - F_s) / b) * (1 - np.exp(-b * t / J))
 
-    # One time constant reaches 1 - exp(-1), about 63.2% of the speed change.
-    progress = omega / omega_inf
-    #finding whether there is taht value
-    reached = np.flatnonzero((time_s > 0) & (progress >= 1 - np.exp(-1)))
-    #if that value exist, then program using that 63.2% time to take the first guess, if that doesn't exit, then using the last recorded time in the sample.
-    if reached.size:
-        initial_time_constant = time_s[reached[0]]
-    else:
-        initial_time_constant = time_s[-1]
-    initial_J = b * initial_time_constant
+    # Apply the requested cutoff without shifting the time origin.
+    selected = time_s >= start_time_s
+    fit_time = time_s[selected]
+    fit_omega = omega[selected]
+    remaining_fraction = 1.0 - fit_omega / omega_inf
+    tolerance = np.finfo(float).eps
+    valid = remaining_fraction > tolerance
+    if np.count_nonzero(valid) < 3:
+        raise ValueError(
+            "Need at least three samples at or after the start time below steady speed"
+        )
 
-    #fitted the curve to find the actual J. 
-    fitted, _ = curve_fit(
-        exponential_response,
-        time_s,
-        omega,
-        p0=[initial_J],
-        bounds=(0.0, np.inf),
-        maxfev=10000,
-    )
-    return float(fitted[0])
+    regression_time = np.concatenate(([0.0], fit_time[valid]))
+    log_remaining = np.concatenate(([0.0], np.log(remaining_fraction[valid])))
+    design = regression_time[:, np.newaxis]
+    coefficients, _, rank, _ = np.linalg.lstsq(design, log_remaining, rcond=None)
+    slope = float(coefficients[0])
+    if rank < 1 or not np.isfinite(slope) or slope >= 0:
+        raise ValueError("The regression must show exponential decay toward steady speed")
+    J = -b / slope
+    if not np.isfinite(J) or J <= 0:
+        raise ValueError("The regression did not produce a finite positive inertia")
+    return J
 
 
 
@@ -133,38 +142,43 @@ def main():
     if not input_paths:
         raise FileNotFoundError(f"No excitation CSV files found in {RESULT_DIR}")
     
-    omega = []
-    tau_in = []
-    used_files=[]
+    cycle_data = {}
     for path in input_paths:
         samples = read_experiment_csv(path)
         if len(samples) >= MIN_SAMPLES_PER_CYCLE:
-            omega.append(samples[-1][1])
-            tau_in.append(samples[-1][2])
-            used_files.append(os.path.basename(path))
+            cycle_data[os.path.basename(path)] = samples
         else:
-            print(f"Skipping{os.path.basename(path)}: too few valid samples")
+            print(f"Skipping {os.path.basename(path)}: too few valid samples")
+    if not cycle_data:
+        raise ValueError("No cycles contain enough valid samples")
 
-    b,Fc = bF_calculation(omega,tau_in)
-    direction = np.sign(samples[-1][1])
-    Fs = Fc * direction
-    J_inertia =[]
-    for path in input_paths:
-        samples = read_experiment_csv(path)
-        if len(samples)>= MIN_SAMPLES_PER_CYCLE:
-            J_inertia.append(exponential_interpolation(samples,b,Fs))
+    # Estimate steady speed from the last 10 readings (or all if fewer exist).
+    omega = [
+        float(np.mean([sample[1] for sample in samples[-10:]]))
+        for samples in cycle_data.values()
+    ]
+    tau_in = [samples[-1][2] for samples in cycle_data.values()]
+    b, Fc = bF_calculation(omega, tau_in)
+    if not np.isfinite(b) or b <= 0:
+        raise ValueError("Steady-state regression must produce a positive finite b")
 
-        else:
-            print(f"Skipping{os.path.basename(path)}:too few valid samples")
-    try:
-        average_J = sum(J_inertia)/len(J_inertia)
-    except ZeroDivisionError:
-        print(f"there is no valid data generated by J_inertia:{J_inertia}")
-    
-    print(f"Inertia J is:{average_J}")
-    print(f"Viscous frictionb:{b}")
-    print(f"Coulomb friction torque:{Fs}")
-    print("test completed")
+    J_inertia = []
+    for (filename, samples), steady_speed in zip(cycle_data.items(), omega):
+        Fs = Fc * np.sign(steady_speed)
+        try:
+            J = exponential_regression(samples, b, Fs)
+        except ValueError as error:
+            print(f"Skipping {filename}: {error}")
+            continue
+        J_inertia.append(J)
+        print(f"{filename}: J = {J:.8g} kg m^2")
+    if not J_inertia:
+        raise ValueError("No valid exponential regressions; cannot estimate final J")
+
+    average_J = float(np.mean(J_inertia))
+    print(f"Inertia J (mean of {len(J_inertia)} cycles): {average_J:.8g} kg m^2")
+    print(f"Mean directional viscous friction b: {b:.8g} Nm/(rad/s)")
+    print(f"Mean absolute Coulomb friction torque: {Fc:.8g} Nm")
 
 
 if __name__ == "__main__":
