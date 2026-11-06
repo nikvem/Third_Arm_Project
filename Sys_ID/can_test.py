@@ -6,7 +6,7 @@ def mac_robstride_scan():
     print("Opening Jhoinrch adapter on macOS...")
     try:
         # Swap 'socketcan' from the script with 'gs_usb' for your Mac hardware
-        bus = can.interface.Bus(interface='gs_usb', channel=0, bitrate=1000000)
+        bus = can.interface.Bus(interface='socketcan', channel="can0", bitrate=1000000)
     except Exception as e:
         print(f"Failed to open adapter: {e}")
         return

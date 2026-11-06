@@ -5,13 +5,12 @@ import os
 import re
 import csv
 import matplotlib
+import numpy as np
 matplotlib.use('Agg') # headless-safe; switch backends if running with a display
 import matplotlib.pyplot as plt
-####################################
-####################################
 
 ####################################
-# Comments:
+
 # If the CAN module is disconnected, please follow the following steps to reconnect:
 # 1. Plug in the CAN module.
 # 2. Select the interpreter in the top right corner of the IDE and this interpreter should include can module.
@@ -19,25 +18,28 @@ import matplotlib.pyplot as plt
 # 4. sudo ip link set can0 up type can bitrate 1000000
 # 5. Run the can_test.py script to check the motor ID.
 # 6. Run Excitation_2.py.
-#
+
 ####################################
 
+
 ############ INPUTS ############
-motorID =127 # CAN ID of motor
-motorKT = 0.94 # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
-timestep = 0.02 # Loop period, s
-torque_cmd = 0.05 # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
-start_threshold = 0.01 # |omega| above which logging begins
-stop_threshold = 0.01 # Filtered |omega_dot| below which motion is considered saturated
-consistency_count = 15 # # consecutive saturated samples required before stopping
-max_runtime = 30.0 # Safety timeout (s), measured from when motion starts
-no_motion_timeout = 10.0 # Safety timeout (s) if the motor never starts moving at all
-c_LPF = 0.3 # LPF filtering coefficient for estimating wdot
+
+motorID = 127               # CAN ID of motor
+motorKT = 0.94              # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
+timestep = 0.02             # Loop period, s
+torque_cmd = 0.05           # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
+start_threshold = 0.01      # |omega| above which logging begins
+stop_threshold = 0.01       # Filtered |omega_dot| below which motion is considered saturated
+consistency_count = 15      # consecutive saturated samples required before stopping
+max_runtime = 35.0          # Safety timeout (s), measured from when motion starts
+no_motion_timeout = 10.0    # Safety timeout (s) if the motor never starts moving at all
+c_LPF = 0.3                 # LPF filtering coefficient for estimating wdot
+
 #################################
 
 def next_cycle_number(result_dir):
     """Return the next cycle number based on plots already in result_dir."""
-    pattern = re.compile(r"excitation_cycle_(\d+)_torque_..(?:jpg|jpeg|png)$", re.IGNORECASE)
+    pattern = re.compile(r"excitation_cycle_(\d+)_torque_.*\.(?:jpg|jpeg|png)$", re.IGNORECASE)
     existing_cycles = []
     if os.path.isdir(result_dir):
         for filename in os.listdir(result_dir):
@@ -49,81 +51,137 @@ def next_cycle_number(result_dir):
 def main():
     cur_cmd = torque_cmd / motorKT
     result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
+    
     os.makedirs(result_dir, exist_ok=True)
     cycle_number = next_cycle_number(result_dir)
+    
     bus_cm = can.Bus(
         interface="socketcan",
-        channel="can0"
+        channel="can0",
+        bitrate = 1000000
     )
+    
     with bus_cm as bus:
         rs_client = robstride.Client(
             bus,
             host_can_id=0xAA
         )
+        
         # Logging arrays
         t_log = [] # time logging
         w_log = [] # omega logging
-        rs_client = robstride.Client(bus)
+        # rs_client = robstride.Client(bus)
+        
         # Enable and zero motor
         rs_client.write_param(motorID, 'run_mode', 0)
-        # This library version has no 'zero_sta' parameter or zero helper, so send its ZeroPos frame (msg type 6) directly
         rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, motorID, [1, 0, 0, 0, 0, 0, 0, 0]))
         rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
         rs_client.write_param(motorID, 'run_mode', robstride.RunMode.Current)
-        rs_client.enable(motorID)
-        time.sleep(1)
-        # Commanding torque to input motor
-        print("----------------- Test Starting -----------------")
-        print(f"Commanding constant torque = {torque_cmd} Nm (Current = {cur_cmd:.4f} A)")
-        rs_client.write_param(motorID, 'iq_ref', cur_cmd)
-        # Start logging when omega nonzero (threshold for filtering noise)
-        moved = False
-        wait_start = time.perf_counter()
-        while True:
-            w = rs_client.read_param(motorID, 'mechvel')
-            if abs(w) > start_threshold:
-                moved = True
-                break
-            if time.perf_counter() - wait_start > no_motion_timeout:
-                print("No motion detected")
-                break
-            time.sleep(timestep)
-        # Log when start moving to reduce delay
-        if moved:
-            start_time = time.perf_counter()
-            t_log.append(0.0)
-            w_log.append(w)
-            w_prev = w
-            wdot_prev = 0
-            t_prev = 0.0
-            saturated_samples = 0
+
+
+        #################################################
+        ############# MAIN RUNNING SEQUENCE #############
+        #################################################
+
+        try: 
+            rs_client.enable(motorID)
+            time.sleep(1)
+            
+            # Commanding torque to input motor
+            print("----------------- Test Starting -----------------")
+            print(f"Commanding constant torque = {torque_cmd} Nm (Current = {cur_cmd:.4f} A)")
+            rs_client.write_param(motorID, 'iq_ref', cur_cmd)
+            # Start logging when omega nonzero (threshold for filtering noise)
+            moved = False
+            wait_start = time.perf_counter()
             while True:
+                w = rs_client.read_param(motorID, 'mechvel')
+                if abs(w) > start_threshold:
+                    moved = True
+                    break
+                if time.perf_counter() - wait_start > no_motion_timeout:
+                    print("No motion detected")
+                    break
                 time.sleep(timestep)
-                t = time.perf_counter() - start_time # timestamp
-                w = rs_client.read_param(motorID, 'mechvel') # omega
-                dt = t-t_prev
-                raw_wdot = (w - w_prev) / dt
-                wdot = c_LPF * wdot_prev + (1 - c_LPF) * raw_wdot #filtered wdot for calculating the rate change, to be below the threshold to consider as saturated.
-                # Logging
-                t_log.append(t)
+            
+            # Log when start moving to reduce delay
+            if moved:
+                start_time = time.perf_counter()
+                t_log.append(0.0)
                 w_log.append(w)
-                if (t > max_runtime):
-                    print("System did not converge")
-                    print("running exceed the threshold time")
-                    break
-                # Require consecutive samples of near-zero angular acceleration.
-                if abs(wdot) < stop_threshold:
-                    saturated_samples += 1
-                else:
-                    saturated_samples = 0
-                if saturated_samples >= consistency_count:
-                    break
                 w_prev = w
-                wdot_prev = wdot
-                t_prev = t
-        # Stop torque and deactivate the motor
-        rs_client.write_param(motorID, 'iq_ref', 0.0)
-        rs_client.disable(motorID)
+                wdot_prev = 0
+                t_prev = 0.0
+                saturated_samples = 0
+                
+                while True:
+                    time.sleep(timestep)
+                    t = time.perf_counter() - start_time # timestamp
+                    w = rs_client.read_param(motorID, 'mechvel') # omega
+                    print(w) # Visual purposes
+                    dt = t-t_prev
+                    raw_wdot = (w - w_prev) / dt
+                    wdot = c_LPF * wdot_prev + (1 - c_LPF) * raw_wdot # ~angular accel
+                    
+                    # Logging
+                    t_log.append(t)
+                    w_log.append(w)
+                    
+                    if (t > max_runtime):
+                        print("System did not converge")
+                        print("running exceed the threshold time")
+                        break
+                    # Require consecutive samples of near-zero angular acceleration.
+                    if abs(wdot) < stop_threshold:
+                        saturated_samples += 1
+                    else:
+                        saturated_samples = 0
+                    if saturated_samples >= consistency_count:
+                        break
+                    
+                    w_prev = w
+                    wdot_prev = wdot
+                    t_prev = t
+
+       # Keyboard interrupt from user
+        except KeyboardInterrupt:
+            print("Keyboard Interrupt: Stopping Motor Torque")
+
+        # Disable motor
+        finally:
+            rs_client.write_param(motorID, 'iq_ref', 0.0)
+            rs_client.disable(motorID)
+
+
+
+    #######################################################
+    ############# DATA ANALYSIS + FILE SAVING #############
+    #######################################################
+
+    # Final omega value (taking avg of last 10 datapoints)
+    omega_final = np.mean(w_log[-10:])
+    print("------------------------------------------------------")
+    print(f"Input torque = {torque_cmd} Nm; Final Omega = {omega_final:.4f} rad/s)")
+    print("------------------------------------------------------")
+
+    # User discretion on whether to save files or not
+    while True:
+        try:
+            answer = input("Save plot and CSV for this run? (y/n): ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\nNo answer given - run not saved.")
+            answer = 'n'
+        if answer in ('y', 'yes', 'n', 'no'):
+            break
+        print("Please type y or n.")
+
+    # Save if user said yest
+    if answer in ('y', 'yes'):
+        # Folder and cycle number are only created/claimed when the run is kept
+        os.makedirs(result_dir, exist_ok=True)
+        cycle_number = next_cycle_number(result_dir)
+   
+   
     # Save one matching plot and CSV for this experiment cycle.
     torque_label = (
         f"{torque_cmd:+.3f}"
@@ -131,6 +189,7 @@ def main():
         .replace("-", "minus")
         .replace(".", "p")
     )
+    
     file_stem = f"excitation_cycle_{cycle_number:03d}_torque_{torque_label}Nm"
     plot_path = os.path.join(result_dir, f"{file_stem}.jpg")
     csv_path = os.path.join(result_dir, f"{file_stem}.csv")
@@ -142,6 +201,7 @@ def main():
     ax.grid(True)
     fig.savefig(plot_path, format="jpg", dpi=200, bbox_inches="tight")
     plt.close(fig)
+    
     # csv file store accompany with jpg plot exist
     with open(csv_path, "w", newline = "", encoding = "UTF-8") as csv_file:
         writer = csv.DictWriter(
@@ -160,5 +220,6 @@ def main():
     print(f"Saved data path:{csv_path}")
     if not t_log:
         print("No motion for csv data storing")
+
 if __name__ == "__main__":
     main()
