@@ -1,10 +1,12 @@
 """Estimate b and Coulomb friction from steady speeds, then J from transients.
 
     tau_in = J * alpha + b * omega + F_c * sign(omega)
-    omega(t) = omega_inf * (1 - exp(-b * t / J))
+    omega(t) = omega_inf * (1 - exp(c - b * (t - t_start) / J))
 
-Exponential regression fits log(1 - omega / omega_inf) = slope*t,
+Exponential regression fits log(1 - omega / omega_inf) = c + slope*(t-t_start),
 where omega_inf = (tau_in - F_s) / b and J = -b / slope.
+Only samples at or after t_start are used. The fitted intercept c allows a
+nonzero starting speed; no artificial (0, 0) point or origin constraint is used.
 Fit each rotation direction separately, then use the equal-weight mean of
 the two b values and the two absolute friction intercepts for all transients.
 The final J is the arithmetic mean of the valid per-cycle estimates.
@@ -16,10 +18,13 @@ import numpy as np
 import math
 import csv
 import re
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
 MIN_SAMPLES_PER_CYCLE = 5
-REGRESSION_START_TIME_S = 1.0
+REGRESSION_START_TIME_S = 0.5
 def read_experiment_csv(path):
     """Read and validate time, speed, and commanded torque from one CSV."""
     samples = []
@@ -77,8 +82,8 @@ def bF_calculation(omega_static: list, tau_in: list):
 
     return float(np.mean(slopes)), float(np.mean(friction_magnitudes))
 
-def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S):
-
+def fit_exponential_response(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S):
+    """Return J and the same fitted parameters used to draw the response."""
     data = np.asarray(samples, dtype=float)
     if data.ndim != 2 or data.shape[1] != 3 or len(data) < 3:
         raise ValueError("Provide at least three (time, omega, torque) samples")
@@ -104,7 +109,7 @@ def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S
     if omega[-1] * omega_inf <= 0 or np.any(omega * omega_inf < 0):
         raise ValueError("Recorded rotation disagrees with the predicted steady speed")
 
-    # Apply the requested cutoff without shifting the time origin.
+    # Select only measurements at or after the requested start time.
     selected = time_s >= start_time_s
     fit_time = time_s[selected]
     fit_omega = omega[selected]
@@ -116,18 +121,81 @@ def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S
             "Need at least three samples at or after the start time below steady speed"
         )
 
-    regression_time = np.concatenate(([0.0], fit_time[valid]))
-    log_remaining = np.concatenate(([0.0], np.log(remaining_fraction[valid])))
-    design = regression_time[:, np.newaxis]
+    if np.ptp(fit_omega[valid]) <= 1e-12:
+        raise ValueError("A changing-speed transient is needed after the regression start time")
+    regression_time = fit_time[valid] - start_time_s
+    log_remaining = np.log(remaining_fraction[valid])
+    # Fit both slope and intercept instead of forcing zero speed at time zero.
+    design = np.column_stack((regression_time, np.ones_like(regression_time)))
     coefficients, _, rank, _ = np.linalg.lstsq(design, log_remaining, rcond=None)
     slope = float(coefficients[0])
-    if rank < 1 or not np.isfinite(slope) or slope >= 0:
+    if rank < 2 or not np.all(np.isfinite(coefficients)) or slope >= 0:
         raise ValueError("The regression must show exponential decay toward steady speed")
     J = -b / slope
     if not np.isfinite(J) or J <= 0:
         raise ValueError("The regression did not produce a finite positive inertia")
-    return J
+    return {
+        "J": J,
+        "slope": slope,
+        "intercept": float(coefficients[1]),
+        "omega_inf": float(omega_inf),
+        "start_time_s": start_time_s,
+    }
 
+
+def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S):
+    """Estimate J with a free log intercept using samples from start_time_s."""
+    return fit_exponential_response(samples, b, F_s, start_time_s)["J"]
+
+
+def plot_cycle(samples, fit, filename, plot_dir):
+    """Plot only the selected time interval, with no synthetic origin point."""
+    data = np.asarray(samples, dtype=float)
+    start = fit["start_time_s"]
+    selected = data[:, 0] >= start
+    time_s, omega = data[selected, 0], data[selected, 1]
+    used = 1.0 - omega / fit["omega_inf"] > np.finfo(float).eps
+    curve_time = np.linspace(start, time_s[-1], 600)
+    # Include the fitted intercept: omitting it would incorrectly force zero speed.
+    curve_speed = -fit["omega_inf"] * np.expm1(
+        fit["intercept"] + fit["slope"] * (curve_time - start)
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 6), layout="constrained")
+    ax.plot(time_s, omega, color="0.65", linewidth=1, label="Measured speed")
+    ax.scatter(time_s[used], omega[used], s=10, color="tab:blue",
+               label="Samples used in regression")
+    ax.plot(curve_time, curve_speed, color="tab:orange", linewidth=2,
+            label="Exponential regression")
+    ax.axhline(fit["omega_inf"], color="tab:green", linestyle="--", linewidth=1,
+               label=f"Predicted steady speed = {fit['omega_inf']:.4g} rad/s")
+    ax.set(xlabel="Time (s)", ylabel="Angular speed (rad/s)",
+           title=f"{os.path.splitext(filename)[0]}\n"
+                 f"J = {fit['J']:.6g} kg m² | Regression starts at {start:g} s",
+           xlim=(start, time_s[-1]))
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=8)
+    path = os.path.join(plot_dir, os.path.splitext(filename)[0] + "_regression.png")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_inertia_summary(filenames, inertias, average_J, plot_dir):
+    labels = [os.path.splitext(name)[0].replace("excitation_cycle_", "")
+              for name in filenames]
+    fig, ax = plt.subplots(figsize=(10, max(5, len(labels) * 0.35)), layout="constrained")
+    positions = np.arange(len(labels))
+    ax.scatter(inertias, positions, color="tab:blue", label="Per-cycle J")
+    ax.axvline(average_J, color="tab:orange", linestyle="--",
+               label=f"Mean J = {average_J:.6g} kg m²")
+    ax.set_yticks(positions, labels)
+    ax.invert_yaxis()
+    ax.set(xlabel="Inertia J (kg m²)", ylabel="CSV cycle and commanded torque",
+           title=f"Inertia estimates — {len(inertias)} valid cycles")
+    ax.grid(axis="x", alpha=0.25)
+    ax.legend()
+    fig.savefig(os.path.join(plot_dir, "inertia_summary.png"), dpi=160)
+    plt.close(fig)
 
 
 def main():
@@ -162,15 +230,21 @@ def main():
     if not np.isfinite(b) or b <= 0:
         raise ValueError("Steady-state regression must produce a positive finite b")
 
+    plot_dir = os.path.join(RESULT_DIR, "regression_plots")
+    os.makedirs(plot_dir, exist_ok=True)
     J_inertia = []
+    fitted_files = []
     for (filename, samples), steady_speed in zip(cycle_data.items(), omega):
         Fs = Fc * np.sign(steady_speed)
         try:
-            J = exponential_regression(samples, b, Fs)
+            fit = fit_exponential_response(samples, b, Fs)
         except ValueError as error:
             print(f"Skipping {filename}: {error}")
             continue
+        J = fit["J"]
         J_inertia.append(J)
+        fitted_files.append(filename)
+        plot_cycle(samples, fit, filename, plot_dir)
         print(f"{filename}: J = {J:.8g} kg m^2")
     if not J_inertia:
         raise ValueError("No valid exponential regressions; cannot estimate final J")
@@ -179,6 +253,10 @@ def main():
     print(f"Inertia J (mean of {len(J_inertia)} cycles): {average_J:.8g} kg m^2")
     print(f"Mean directional viscous friction b: {b:.8g} Nm/(rad/s)")
     print(f"Mean absolute Coulomb friction torque: {Fc:.8g} Nm")
+    plot_inertia_summary(fitted_files, J_inertia, average_J, plot_dir)
+    print(f"Saved updated plots: {plot_dir}")
+
+
 
 
 if __name__ == "__main__":

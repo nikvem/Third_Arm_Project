@@ -180,8 +180,7 @@ def main():
         # Folder and cycle number are only created/claimed when the run is kept
         os.makedirs(result_dir, exist_ok=True)
         cycle_number = next_cycle_number(result_dir)
-   
-   
+
     # Save one matching plot and CSV for this experiment cycle.
     torque_label = (
         f"{torque_cmd:+.3f}"
