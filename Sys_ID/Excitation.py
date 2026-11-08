@@ -50,7 +50,7 @@ def next_cycle_number(result_dir):
 
 def main():
     cur_cmd = torque_cmd / motorKT
-    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
+    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result_RS05")
     
     os.makedirs(result_dir, exist_ok=True)
     cycle_number = next_cycle_number(result_dir)
