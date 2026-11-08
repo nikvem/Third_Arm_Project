@@ -21,6 +21,7 @@ import re
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result")
 MIN_SAMPLES_PER_CYCLE = 5
@@ -83,12 +84,17 @@ def bF_calculation(omega_static: list, tau_in: list):
     return float(np.mean(slopes)), float(np.mean(friction_magnitudes))
 
 def fit_exponential_response(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S):
-    """Return J and the same fitted parameters used to draw the response."""
+
+    """Estimate J using nonlinear exponential regression."""
+
     data = np.asarray(samples, dtype=float)
+
     if data.ndim != 2 or data.shape[1] != 3 or len(data) < 3:
         raise ValueError("Provide at least three (time, omega, torque) samples")
+
     if not np.all(np.isfinite(data)):
         raise ValueError("Samples must contain only finite values")
+
     if not np.isfinite(b) or b <= 0 or not np.isfinite(F_s):
         raise ValueError("b must be positive and finite; F_s must be finite")
 
@@ -98,48 +104,73 @@ def fit_exponential_response(samples, b, F_s, start_time_s=REGRESSION_START_TIME
     time_s = data[:, 0]
     omega = data[:, 1]
     tau_in = data[0, 2]
+
     if np.any(time_s < 0) or np.any(np.diff(time_s) <= 0):
         raise ValueError("Sample times must be nonnegative and strictly increasing")
+
     if not np.allclose(data[:, 2], tau_in, rtol=1e-6, atol=1e-9):
-        raise ValueError("The exponential model requires constant input torque")
+        raise ValueError("Input torque must remain constant")
 
-    omega_inf = (tau_in - F_s) / b
+    # omega_inf = avg of last 10 values for omega
+    omega_inf = float(np.mean(omega[-10:]))
+
     if abs(omega_inf) <= 1e-12 or np.ptp(omega) <= 1e-12:
-        raise ValueError("A changing-speed transient is needed to estimate J")
-    if omega[-1] * omega_inf <= 0 or np.any(omega * omega_inf < 0):
-        raise ValueError("Recorded rotation disagrees with the predicted steady speed")
+        raise ValueError("A changing-speed transient is needed")
 
-    # Select only measurements at or after the requested start time.
+    if omega[-1] * omega_inf <= 0 or np.any(omega * omega_inf < 0):
+        raise ValueError("Recorded rotation disagrees with predicted steady speed")
+
+    # Select measurements at or after the requested start time.
     selected = time_s >= start_time_s
+
     fit_time = time_s[selected]
     fit_omega = omega[selected]
-    remaining_fraction = 1.0 - fit_omega / omega_inf
-    tolerance = np.finfo(float).eps
-    valid = remaining_fraction > tolerance
-    if np.count_nonzero(valid) < 3:
-        raise ValueError(
-            "Need at least three samples at or after the start time below steady speed"
-        )
 
-    if np.ptp(fit_omega[valid]) <= 1e-12:
-        raise ValueError("A changing-speed transient is needed after the regression start time")
-    regression_time = fit_time[valid] - start_time_s
-    log_remaining = np.log(remaining_fraction[valid])
-    # Fit both slope and intercept instead of forcing zero speed at time zero.
-    design = np.column_stack((regression_time, np.ones_like(regression_time)))
-    coefficients, _, rank, _ = np.linalg.lstsq(design, log_remaining, rcond=None)
-    slope = float(coefficients[0])
-    if rank < 2 or not np.all(np.isfinite(coefficients)) or slope >= 0:
-        raise ValueError("The regression must show exponential decay toward steady speed")
-    J = -b / slope
+    if len(fit_time) < 3:
+        raise ValueError("Need at least three samples for regression")
+
+    if np.ptp(fit_omega) <= 1e-12:
+        raise ValueError("A changing-speed transient is needed")
+
+    # Define the exponential model.
+    # J is the ONLY unknown parameter.
+    def exponential_model(t, J):
+        return omega_inf * (1 - np.exp(-b * t / J))
+
+    # Initial guess for inertia.
+    J_initial = b * (fit_time[-1] - fit_time[0])
+
+    # Nonlinear least-squares regression.
+    popt, pcov = curve_fit(
+        exponential_model,
+        fit_time,
+        fit_omega,
+        p0=[J_initial],
+        bounds=(1e-12, np.inf),
+        maxfev=20000
+    )
+
+    J = float(popt[0])
+
     if not np.isfinite(J) or J <= 0:
-        raise ValueError("The regression did not produce a finite positive inertia")
+        raise ValueError("Regression did not produce a finite positive inertia")
+
+    # Calculate goodness of fit.
+    predicted_omega = exponential_model(fit_time, J)
+
+    residuals = fit_omega - predicted_omega
+    ss_res = np.sum(residuals**2)
+    ss_tot = np.sum((fit_omega - np.mean(fit_omega))**2)
+
+    r_squared = 1 - ss_res / ss_tot
+
     return {
         "J": J,
-        "slope": slope,
-        "intercept": float(coefficients[1]),
         "omega_inf": float(omega_inf),
+        "r_squared": float(r_squared),
         "start_time_s": start_time_s,
+        "predicted_omega": predicted_omega,
+        "fit_time": fit_time,
     }
 
 
@@ -148,7 +179,7 @@ def exponential_regression(samples, b, F_s, start_time_s=REGRESSION_START_TIME_S
     return fit_exponential_response(samples, b, F_s, start_time_s)["J"]
 
 
-def plot_cycle(samples, fit, filename, plot_dir):
+def plot_cycle(samples, fit, filename, plot_dir, b):
     """Plot only the selected time interval, with no synthetic origin point."""
     data = np.asarray(samples, dtype=float)
     start = fit["start_time_s"]
@@ -157,8 +188,8 @@ def plot_cycle(samples, fit, filename, plot_dir):
     used = 1.0 - omega / fit["omega_inf"] > np.finfo(float).eps
     curve_time = np.linspace(start, time_s[-1], 600)
     # Include the fitted intercept: omitting it would incorrectly force zero speed.
-    curve_speed = -fit["omega_inf"] * np.expm1(
-        fit["intercept"] + fit["slope"] * (curve_time - start)
+    curve_speed = fit["omega_inf"] * (
+    1 - np.exp(-b * curve_time / fit["J"])
     )
 
     fig, ax = plt.subplots(figsize=(10, 6), layout="constrained")
@@ -168,7 +199,7 @@ def plot_cycle(samples, fit, filename, plot_dir):
     ax.plot(curve_time, curve_speed, color="tab:orange", linewidth=2,
             label="Exponential regression")
     ax.axhline(fit["omega_inf"], color="tab:green", linestyle="--", linewidth=1,
-               label=f"Predicted steady speed = {fit['omega_inf']:.4g} rad/s")
+               label=f"Recorded steady speed = {fit['omega_inf']:.4g} rad/s")
     ax.set(xlabel="Time (s)", ylabel="Angular speed (rad/s)",
            title=f"{os.path.splitext(filename)[0]}\n"
                  f"J = {fit['J']:.6g} kg m² | Regression starts at {start:g} s",
@@ -244,7 +275,7 @@ def main():
         J = fit["J"]
         J_inertia.append(J)
         fitted_files.append(filename)
-        plot_cycle(samples, fit, filename, plot_dir)
+        plot_cycle(samples, fit, filename, plot_dir, b)
         print(f"{filename}: J = {J:.8g} kg m^2")
     if not J_inertia:
         raise ValueError("No valid exponential regressions; cannot estimate final J")
