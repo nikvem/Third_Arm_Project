@@ -181,44 +181,46 @@ def main():
         os.makedirs(result_dir, exist_ok=True)
         cycle_number = next_cycle_number(result_dir)
 
-    # Save one matching plot and CSV for this experiment cycle.
-    torque_label = (
-        f"{torque_cmd:+.3f}"
-        .replace("+", "plus")
-        .replace("-", "minus")
-        .replace(".", "p")
-    )
-    
-    file_stem = f"excitation_cycle_{cycle_number:03d}_torque_{torque_label}Nm"
-    plot_path = os.path.join(result_dir, f"{file_stem}.jpg")
-    csv_path = os.path.join(result_dir, f"{file_stem}.csv")
-    fig, ax = plt.subplots()
-    ax.plot(t_log, w_log)
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Omega (rad/s)')
-    ax.set_title(f'Excitation cycle {cycle_number}, torque = {torque_cmd:g} Nm')
-    ax.grid(True)
-    fig.savefig(plot_path, format="jpg", dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    
-    # csv file store accompany with jpg plot exist
-    with open(csv_path, "w", newline = "", encoding = "UTF-8") as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=["cycle", "time_s", "omega_rad_s", "torque_input"],
+        # Save one matching plot and CSV for this experiment cycle.
+        torque_label = (
+            f"{torque_cmd:+.3f}"
+            .replace("+", "plus")
+            .replace("-", "minus")
+            .replace(".", "p")
         )
-        writer.writeheader()
-        for t,omega in zip(t_log, w_log):
-            writer.writerow({
-                "cycle": cycle_number,
-                "time_s": t,
-                "omega_rad_s": omega,
-                "torque_input": torque_cmd,
-            })
-    print(f"saved plot: {plot_path}")
-    print(f"Saved data path:{csv_path}")
-    if not t_log:
-        print("No motion for csv data storing")
+        
+        file_stem = f"excitation_cycle_{cycle_number:03d}_torque_{torque_label}Nm"
+        plot_path = os.path.join(result_dir, f"{file_stem}.jpg")
+        csv_path = os.path.join(result_dir, f"{file_stem}.csv")
+        fig, ax = plt.subplots()
+        ax.plot(t_log, w_log)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Omega (rad/s)')
+        ax.set_title(f'Excitation cycle {cycle_number}, torque = {torque_cmd:g} Nm')
+        ax.grid(True)
+        fig.savefig(plot_path, format="jpg", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        
+        # csv file store accompany with jpg plot exist
+        with open(csv_path, "w", newline = "", encoding = "UTF-8") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["cycle", "time_s", "omega_rad_s", "torque_input"],
+            )
+            writer.writeheader()
+            for t,omega in zip(t_log, w_log):
+                writer.writerow({
+                    "cycle": cycle_number,
+                    "time_s": t,
+                    "omega_rad_s": omega,
+                    "torque_input": torque_cmd,
+                })
+        print(f"saved plot: {plot_path}")
+        print(f"Saved data path:{csv_path}")
+        if not t_log:
+            print("No motion for csv data storing")
+    else:
+        print("No data saved")
 
 if __name__ == "__main__":
     main()
