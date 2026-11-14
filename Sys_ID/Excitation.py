@@ -27,11 +27,11 @@ import matplotlib.pyplot as plt
 motorID = 127               # CAN ID of motor
 motorKT = 0.94              # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
 timestep = 0.02             # Loop period, s
-torque_cmd = 0.05           # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
-start_threshold = 0.01      # |omega| above which logging begins
+torque_cmd = 0.045          # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
+start_threshold = 0.2       # |omega| above nhich logging begins
 stop_threshold = 0.01       # Filtered |omega_dot| below which motion is considered saturated
 consistency_count = 15      # consecutive saturated samples required before stopping
-max_runtime = 35.0          # Safety timeout (s), measured from when motion starts
+max_runtime = 60.0          # Safety timeout (s), measured from when motion starts
 no_motion_timeout = 10.0    # Safety timeout (s) if the motor never starts moving at all
 c_LPF = 0.3                 # LPF filtering coefficient for estimating wdot
 
@@ -50,7 +50,7 @@ def next_cycle_number(result_dir):
 
 def main():
     cur_cmd = torque_cmd / motorKT
-    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result_RS05")
+    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS05_1(2)")
     
     os.makedirs(result_dir, exist_ok=True)
     cycle_number = next_cycle_number(result_dir)
@@ -73,10 +73,10 @@ def main():
         # rs_client = robstride.Client(bus)
         
         # Enable and zero motor
-        rs_client.write_param(motorID, 'run_mode', 0)
+        rs_client.write_param(motorID, 'run_mode', 3)
         rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, motorID, [1, 0, 0, 0, 0, 0, 0, 0]))
         rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
-        rs_client.write_param(motorID, 'run_mode', robstride.RunMode.Current)
+        # rs_client.write_param(motorID, 'run_mode', robstride.RunMode.Current)
 
 
         #################################################

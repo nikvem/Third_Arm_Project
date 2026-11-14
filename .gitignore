@@ -1,6 +1,9 @@
+<<<<<<< HEAD
 # Ignore Python cache
 __pycache__/
-*.pyc
+.vscode/
+.vscode/browse.vc.db*
+
 
 # Ignore virtual environments
 venv/
@@ -21,3 +24,8 @@ dist/
 
 # Ignore a specific file
 config.json
+=======
+.vscode/browse.vc.db
+>>>>>>> 100990c (New Sys_ID data.)
+.vscode/browse.vc.db*
+.vscode/browse.vc.db*

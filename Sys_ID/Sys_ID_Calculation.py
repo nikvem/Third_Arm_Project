@@ -23,9 +23,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "result_RS05")
+RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS05_1(2)")
 MIN_SAMPLES_PER_CYCLE = 5
-REGRESSION_START_TIME_S = 0.5
+REGRESSION_START_TIME_S = 1
 def read_experiment_csv(path):
     """Read and validate time, speed, and commanded torque from one CSV."""
     samples = []
@@ -286,10 +286,12 @@ def main():
     print(f"Mean absolute Coulomb friction torque: {Fc:.8g} Nm")
     plot_inertia_summary(fitted_files, J_inertia, average_J, plot_dir)
     print(f"Saved updated plots: {plot_dir}")
+    print("Input torque and final omega (mean of last 10 readings):")
+    for (filename, _), torque, final_omega in zip(cycle_data.items(), tau_in, omega):
+        print(f"{filename}: torque = {torque:.8g} Nm, omega = {final_omega:.8g} rad/s")
 
 
 
 
 if __name__ == "__main__":
     main()
-

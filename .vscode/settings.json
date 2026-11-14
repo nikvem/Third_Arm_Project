@@ -1,0 +1,33 @@
+{
+    "ROS2.distro": "humble",
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.autoComplete.extraPaths": [
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/build/servo_action",
+        "/home/kevinc/road_repair_robot_ws/install/servo_action/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/build/repair_robot_control",
+        "/home/kevinc/road_repair_robot_ws/install/repair_robot_control/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/install/ranger_msgs/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_msgs_v4/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/build/dobot_moveit",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_moveit/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/build/dobot_demo",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_demo/lib/python3.10/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/build/servo_action",
+        "/home/kevinc/road_repair_robot_ws/install/servo_action/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/build/repair_robot_control",
+        "/home/kevinc/road_repair_robot_ws/install/repair_robot_control/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/install/ranger_msgs/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_msgs_v4/local/lib/python3.10/dist-packages",
+        "/home/kevinc/road_repair_robot_ws/build/dobot_moveit",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_moveit/lib/python3.10/site-packages",
+        "/home/kevinc/road_repair_robot_ws/build/dobot_demo",
+        "/home/kevinc/road_repair_robot_ws/install/dobot_demo/lib/python3.10/site-packages"
+    ]
+}
