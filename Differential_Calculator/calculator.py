@@ -1,16 +1,15 @@
 # Initial differential calculator for J5 & J6
-# Reference: zero is the shaft straight with the forearm, positive pitch is up, 
-# and positive roll is clockwise (looking from the wrist tip toward the forearm)
+# Reference: 
+# Zero is the shaft straight with the forearm
+# Positive pitch is up 
+# Positive roll is CCW (looking at wrist head-on)
+
+# NOTE: Positive torque on motor makes them move CW
 
 import math
+import numpy as np
 
-J5_SIGN = 1
-J6_SIGN = 1
-
-J5_ZERO = 0
-J6_ZERO = 0
-
-PULLEY_RATIO = 2  # To account for the gear ratio
+PULLEY_RATIO = 2 
 
 
 def calculate(roll, pitch, roll_torque, pitch_torque):
@@ -21,17 +20,24 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
     if not -90 <= roll <= 90 or not -90 <= pitch <= 90:
         raise ValueError("Roll and pitch must each be between -90 and 90 degrees.")
 
-    if J5_SIGN not in (-1, 1) or J6_SIGN not in (-1, 1):
-        raise ValueError("Motor signs must be 1 or -1.")
-
     # Convert the wrist angles into motor angles, including the pulley ratio
-    j5_angle = J5_ZERO + J5_SIGN * PULLEY_RATIO * (roll + pitch)
-    j6_angle = J6_ZERO + J6_SIGN * PULLEY_RATIO * (roll - pitch)
+    j5_angle = PULLEY_RATIO * (roll + pitch)
+    j6_angle = PULLEY_RATIO * (roll - pitch)
 
-    # Split the wrist torques between the two motors and account for gear ratio
-    j5_torque = J5_SIGN * (roll_torque + pitch_torque) / 2 / PULLEY_RATIO
-    j6_torque = J6_SIGN * (roll_torque - pitch_torque) / 2 / PULLEY_RATIO
+    # Solving for torques
+    A = np.array([[1, 0, -1, 0],
+                  [0, 1, 0, 1],
+                  [1, 1, 1, -1], 
+                  [0, 1, 0, -1]])
+    b = np.array([pitch_torque, roll_torque, 0, 0])
+    torques = np.linalg.solve(A, b) 
+    print(torques)
+    j5_torque = torques[0] + torques[1]
+    j6_torque = -torques[2] + torques[3]
 
+    if (j5_torque > 5.5 or j6_torque > 5.5):
+        raise ValueError("Exceeded motor torque threshold")
+    
     return j5_angle, j6_angle, j5_torque, j6_torque
 
 
