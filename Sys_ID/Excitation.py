@@ -24,11 +24,11 @@ import matplotlib.pyplot as plt
 
 ############ INPUTS ############
 
-motorID = 127               # CAN ID of motor
-motorKT = 0.94              # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
+motorID = 2               # CAN ID of motor
+motorKT = 2.36            # Torque constant, Nm/Arms (1.22 for RS01/RS02, 2.36 for RS03)
 timestep = 0.02             # Loop period, s
-torque_cmd = 0.045          # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
-start_threshold = 0.2       # |omega| above nhich logging begins
+torque_cmd = -0.60        # <-- EDIT THIS between runs. Constant commanded torque, Nm (can be negative)
+start_threshold = 0.3       # |omega| above nhich logging begins
 stop_threshold = 0.01       # Filtered |omega_dot| below which motion is considered saturated
 consistency_count = 15      # consecutive saturated samples required before stopping
 max_runtime = 60.0          # Safety timeout (s), measured from when motion starts
@@ -50,7 +50,7 @@ def next_cycle_number(result_dir):
 
 def main():
     cur_cmd = torque_cmd / motorKT
-    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS05_1(2)")
+    result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS03_1")
     
     os.makedirs(result_dir, exist_ok=True)
     cycle_number = next_cycle_number(result_dir)

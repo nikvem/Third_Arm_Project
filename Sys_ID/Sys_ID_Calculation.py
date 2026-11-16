@@ -23,7 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS05_1(2)")
+RESULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RS03_1")
 MIN_SAMPLES_PER_CYCLE = 5
 REGRESSION_START_TIME_S = 1
 def read_experiment_csv(path):
