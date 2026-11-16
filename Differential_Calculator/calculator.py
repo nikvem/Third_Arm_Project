@@ -31,9 +31,9 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
                   [0, 1, 0, -1]])
     b = np.array([pitch_torque, roll_torque, 0, 0])
     torques = np.linalg.solve(A, b) 
-    print(torques)
-    j5_torque = torques[0] + torques[1]
-    j6_torque = -torques[2] + torques[3]
+
+    j5_torque = (torques[0] + torques[1]) / PULLEY_RATIO
+    j6_torque = (-torques[2] + torques[3]) / PULLEY_RATIO
 
     if (j5_torque > 5.5 or j6_torque > 5.5):
         raise ValueError("Exceeded motor torque threshold")
