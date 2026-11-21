@@ -7,6 +7,16 @@ import time
 import can
 import robstride
 
+####################################
+ 
+# If the CAN module is disconnected, please follow the following steps to reconnect:
+# 1. Plug in the CAN module.
+# 2. Run the can_test.py script to check the motor IDs.
+# 3. sudo ip link set can0 down
+# 4. sudo ip link set can0 up type can bitrate 1000000
+ 
+####################################
+
 """
 angle reading directly from j5 motor and j6 motor used
 PD controller for the angle holding
@@ -53,7 +63,7 @@ def read_motor_angles(rs_client, j5_id=J5_ID, j6_id=J6_ID):
 def motor_angle_to_pitch_and_roll(j5_angle, j6_angle):
     #convert motor andgles to angle of pitch and roll
     roll_angle = (j5_angle +j6_angle)/(2*cal.PULLEY_RATIO)
-    pitch_angle = (j5_angle - j6_angle)/(2*cal.PULLEY_RATIO)
+    pitch_angle = (j6_angle - j5_angle)/(2*cal.PULLEY_RATIO)
     return roll_angle, pitch_angle
 
 
@@ -71,8 +81,8 @@ def main():
         previous_time = None
         previous_roll = None
         #conditioned to break from while loop when the angle is within 1 degree and the speed is slower than 2 degree/s
-        angle_tolerance = math.radians(1.0)   # Within 1 degree
-        speed_tolerance = math.radians(2.0)   # Slower than 2 degrees/second
+        angle_tolerance = math.radians(1)   # Within 1 degree
+        speed_tolerance = math.radians(2)   # Slower than 2 degree/second
         settle_since = None
         try:
             # Configure both motors while disabled, without resetting encoder zeros.
@@ -98,7 +108,7 @@ def main():
                     dt = now - previous_time
                     pitch_velocity = (pitch_angle - previous_pitch) / dt
                     roll_velocity = (roll_angle - previous_roll) / dt
-                tau_pitch = mass* 9.81 * length *np.cos(pitch_angle + FOREARM_ELEVATION_RAD) + kpp*(d_pitch - pitch_angle) - kdp*pitch_velocity
+                tau_pitch = mass* 9.81 * length *np.cos(pitch_angle) + kpp*(d_pitch - pitch_angle) - kdp*pitch_velocity
                 tau_roll = kpr * (d_roll - roll_angle) - kdr * roll_velocity
                 previous_pitch = pitch_angle
                 previous_time = now
@@ -114,6 +124,9 @@ def main():
                     raise ValueError("Exceeded motor current threshold")
                 rs_client.write_param(J5_ID, 'iq_ref', current5)
                 rs_client.write_param(J6_ID, 'iq_ref', current6)
+
+
+                # Check if the system is at the target angles and velocities
 
                 at_target = (
                     abs(d_pitch - pitch_angle) < angle_tolerance
