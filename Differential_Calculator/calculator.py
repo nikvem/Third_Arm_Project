@@ -10,6 +10,7 @@ import math
 import numpy as np
 
 PULLEY_RATIO = 2 
+MOTOR_TORQUE_LIMIT = 5.5  # N*m; shared with the current limit in the PD controller.
 
 
 def calculate(roll, pitch, roll_torque, pitch_torque):
