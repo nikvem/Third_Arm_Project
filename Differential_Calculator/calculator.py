@@ -26,9 +26,9 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
 
     # Solving for torques
     A = np.array([[1, 0, -1, 0],
-                  [0, 1, 0, 1],
-                  [1, 1, 1, -1], 
-                  [0, 1, 0, -1]])
+                [0, 1, 0, 1],
+                [1, 1, 1, -1], 
+                [0, 1, 0, -1]])
     b = np.array([pitch_torque, roll_torque, 0, 0])
     torques = np.linalg.solve(A, b) 
 
