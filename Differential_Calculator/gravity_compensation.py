@@ -28,7 +28,7 @@ HOST_CAN_ID = 0xAA
 J5_ID = 5
 J6_ID = 6
 MOTOR_KT = 0.94 #motor current constant
-CURRENT_LIMIT = cal.MOTOR_TORQUE_LIMIT / MOTOR_KT  # A; existing torque cap converted to current.
+
 # Set these to encoder readings at physical roll=pitch=0 (hand straight).
 # Zero defaults assume that the motors were already calibrated to that pose.
 J5_ZERO_RAD = 0.0
@@ -41,12 +41,12 @@ READ_INTERVAL = 0.1  # Seconds between pairs of reads.
 
 
 
-mass = 0.5 #kg
-d_roll = 0.1 #desired roll in radian
-d_pitch = 0.1#desired pitch in radian
-length = 0.1
-kpp = 0.1
-kdp = 0.1
+mass = 0.2 #kg
+d_roll = 0 #desired roll in radian
+d_pitch = 3.1415926/4 #desired pitch in radian
+length = 5.75*25.4/1000
+kpp = 1
+kdp = 0.5
 kpr = 0.1
 kdr = 0.1
 
@@ -71,12 +71,18 @@ def motor_angle_to_pitch_and_roll(j5_angle, j6_angle):
 def main():
     if not math.isfinite(MOTOR_KT) or MOTOR_KT <= 0:
         raise ValueError("MOTOR_KT must be finite and positive")
-    if not math.isfinite(CURRENT_LIMIT) or CURRENT_LIMIT <= 0:
-        raise ValueError("CURRENT_LIMIT must be finite and positive")
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
             ) as bus:
         rs_client = robstride.Client(bus, host_can_id=HOST_CAN_ID)
+        rs_client.write_param(J5_ID, 'run_mode', 3)
+        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J5_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
+        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
+    
+        rs_client.write_param(J6_ID, 'run_mode', 3)
+        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J6_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
+        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
+         
         previous_pitch = None
         previous_time = None
         previous_roll = None
@@ -113,15 +119,16 @@ def main():
                 previous_pitch = pitch_angle
                 previous_time = now
                 previous_roll = roll_angle
+                
 
                 #converting back to j5_torque and j6_torque
                 _, _, j5_torque, j6_torque = cal.calculate(roll_angle, pitch_angle, tau_roll, tau_pitch)
+                
+                print(f"id 5: {j5_torque} | id 6:{j6_torque} | roll_angle:{roll_angle} | pitch_angle:{pitch_angle}")
                 current5 = j5_torque / MOTOR_KT
                 current6 = j6_torque / MOTOR_KT
                 if not all(math.isfinite(x) for x in (current5, current6)):
                     raise ValueError("Non-finite motor current")
-                if max(abs(current5), abs(current6)) > CURRENT_LIMIT:
-                    raise ValueError("Exceeded motor current threshold")
                 rs_client.write_param(J5_ID, 'iq_ref', current5)
                 rs_client.write_param(J6_ID, 'iq_ref', current6)
 
