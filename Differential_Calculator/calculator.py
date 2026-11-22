@@ -10,7 +10,7 @@ import math
 import numpy as np
 
 PULLEY_RATIO = 2 
-MOTOR_TORQUE_LIMIT = 5.5  # N*m; shared with the current limit in the PD controller.
+MOTOR_TORQUE_LIMIT = 3  # N*m; shared with the current limit in the PD controller.
 
 
 def calculate(roll, pitch, roll_torque, pitch_torque):
@@ -28,7 +28,7 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
     # Solving for torques
     A = np.array([[1,1],
                   [1,-1]])
-    b = np.array([pitch_torque, roll_torque])
+    b = np.array([roll_torque, pitch_torque])
     torques = np.linalg.solve(A, b) 
 
     j5_torque = torques[0] / PULLEY_RATIO

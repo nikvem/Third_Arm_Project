@@ -44,12 +44,12 @@ PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
 
-mass = 0.5 #kg
-d_roll = 0.1 #desired roll in radian
-d_pitch = 0.1#desired pitch in radian
-length = 0.1
-kpp = 0.1
-kdp = 0.1
+mass = 0.8 # kg
+d_roll = 0 # desired roll in radian
+d_pitch = np.pi/4 # desired pitch in radian
+length = 6.25 * 0.0254 # m
+kpp = 5.5
+kdp = 1.2
 kpr = 0.1
 kdr = 0.1
 
@@ -64,9 +64,9 @@ def read_motor_angles(rs_client, j5_id=J5_ID, j6_id=J6_ID):
     return j5_angle - J5_ZERO_RAD, j6_angle - J6_ZERO_RAD
 
 def motor_angle_to_pitch_and_roll(j5_angle, j6_angle):
-    #convert motor andgles to angle of pitch and roll
+    #convert motor angles to angle of pitch and roll
     roll_angle = (j5_angle +j6_angle)/(2*cal.PULLEY_RATIO)
-    pitch_angle = (j6_angle - j5_angle)/(2*cal.PULLEY_RATIO)
+    pitch_angle = (j5_angle - j6_angle)/(2*cal.PULLEY_RATIO)
     return roll_angle, pitch_angle
 
 
@@ -135,6 +135,18 @@ def run_controller(samples):
         speed_tolerance = math.radians(2)   # Slower than 2 degree/second
         settle_since = None
         first_sample_time = None
+        
+        # Enable and zero motors
+        rs_client.write_param(J5_ID, 'run_mode', 3)
+        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J5_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
+        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
+ 
+        rs_client.write_param(J6_ID, 'run_mode', 3)
+        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J6_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
+        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
+
+
+
         try:
             # Configure both motors while disabled, without resetting encoder zeros.
             for motor_id in (J5_ID, J6_ID):
@@ -145,7 +157,6 @@ def run_controller(samples):
             read_motor_angles(rs_client)  # Check feedback before enabling.
             for motor_id in (J5_ID, J6_ID):
                 rs_client.enable(motor_id)
-
                 
             #core iteration here
             while True:
@@ -172,7 +183,8 @@ def run_controller(samples):
                     pitch_velocity = (pitch_angle - previous_pitch) / dt
                     roll_velocity = (roll_angle - previous_roll) / dt
                 tau_pitch = mass* 9.81 * length *np.cos(pitch_angle) + kpp*(d_pitch - pitch_angle) - kdp*pitch_velocity
-                tau_roll = kpr * (d_roll - roll_angle) - kdr * roll_velocity
+                #tau_roll = kpr * (d_roll - roll_angle) - kdr * roll_velocity
+                tau_roll = 0
                 previous_pitch = pitch_angle
                 previous_time = now
                 previous_roll = roll_angle
@@ -181,6 +193,7 @@ def run_controller(samples):
                 _, _, j5_torque, j6_torque = cal.calculate(roll_angle, pitch_angle, tau_roll, tau_pitch)
                 current5 = j5_torque / MOTOR_KT
                 current6 = j6_torque / MOTOR_KT
+                print(f"current6:{current6}")
                 if not all(math.isfinite(x) for x in (current5, current6)):
                     raise ValueError("Non-finite motor current")
                 if max(abs(current5), abs(current6)) > CURRENT_LIMIT:

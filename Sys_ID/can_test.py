@@ -19,7 +19,7 @@ COMM_READ_PARAM = 0x11    # type 17
 PARAM_MECH_POS = 0x7019   # mechPos (float, rad) -- verify index in your model's manual
 # ---------------------------------------------------------------------------
  
- 
+
 def make_ext_id(comm_type, host_id, device_id):
     return (comm_type << 24) | (host_id << 8) | device_id
  
