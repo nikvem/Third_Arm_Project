@@ -34,7 +34,9 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
     j5_torque = torques[0] / PULLEY_RATIO
     j6_torque = torques[1] / PULLEY_RATIO
 
-    if (j5_torque > 5.5 or j6_torque > 5.5):
+    if not all(math.isfinite(x) for x in (j5_torque, j6_torque)):
+        raise ValueError("Non-finite motor torque")
+    if max(abs(j5_torque), abs(j6_torque)) > MOTOR_TORQUE_LIMIT:
         raise ValueError("Exceeded motor torque threshold")
     
     return j5_angle, j6_angle, j5_torque, j6_torque

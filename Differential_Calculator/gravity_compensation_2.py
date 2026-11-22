@@ -40,6 +40,7 @@ J6_ZERO_RAD = 0.0
 # and the load COM is on the hand axis, distance `length` from the pitch joint.
 FOREARM_ELEVATION_RAD = 0.0
 READ_INTERVAL = 0.1  # Seconds between pairs of reads.
+STOP_WHEN_SETTLED = False  # Keep supporting the load; Ctrl+C stops and plots.
 PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
@@ -93,8 +94,8 @@ def plot_tuning_run(samples):
     try:
         for motor, color in (("j5", "tab:blue"), ("j6", "tab:orange")):
             torque_ax.plot(times, [s[f"{motor}_commanded_torque_nm"] for s in samples],
-                           label=f"{motor.upper()} commanded", color=color,
-                           marker=".", markersize=3)
+                            label=f"{motor.upper()} commanded", color=color,
+                            marker=".", markersize=3)
         torque_ax.set_ylabel("Torque (N·m)")
         torque_ax.set_title("PD tuning — recorded commands and angles")
         torque_ax.legend()
@@ -102,10 +103,10 @@ def plot_tuning_run(samples):
 
         for joint, color in (("pitch", "tab:blue"), ("roll", "tab:orange")):
             angle_ax.plot(times, [math.degrees(s[f"{joint}_rad"]) for s in samples],
-                          label=f"{joint.capitalize()} measured", color=color,
-                          marker=".", markersize=3)
+                        label=f"{joint.capitalize()} measured", color=color,
+                        marker=".", markersize=3)
             angle_ax.plot(times, [math.degrees(s[f"desired_{joint}_rad"]) for s in samples],
-                          label=f"{joint.capitalize()} desired", color=color, linestyle="--")
+                        label=f"{joint.capitalize()} desired", color=color, linestyle="--")
         angle_ax.set_ylabel("Angle (deg)")
         angle_ax.set_xlabel("Time since first sample (s)")
         angle_ax.legend()
@@ -123,30 +124,25 @@ def run_controller(samples):
         raise ValueError("MOTOR_KT must be finite and positive")
     if not math.isfinite(CURRENT_LIMIT) or CURRENT_LIMIT <= 0:
         raise ValueError("CURRENT_LIMIT must be finite and positive")
+    j5_desired_deg, j6_desired_deg, _, _ = cal.calculate(
+        math.degrees(d_roll), math.degrees(d_pitch), 0.0, 0.0
+    )
+    j5_angle_d = math.radians(j5_desired_deg)
+    j6_angle_d = math.radians(j6_desired_deg)
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
             ) as bus:
         rs_client = robstride.Client(bus, host_can_id=HOST_CAN_ID)
-        previous_pitch = None
+        previous_j5_angle = None
+        previous_j6_angle = None
         previous_time = None
-        previous_roll = None
-        #conditioned to break from while loop when the angle is within 1 degree and the speed is slower than 2 degree/s
+        # Report settled only after both angle and velocity remain within tolerance.
         angle_tolerance = math.radians(1)   # Within 1 degree
         speed_tolerance = math.radians(2)   # Slower than 2 degree/second
         settle_since = None
+        target_reported = False
         first_sample_time = None
         
-        # Enable and zero motors
-        rs_client.write_param(J5_ID, 'run_mode', 3)
-        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J5_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
-        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
- 
-        rs_client.write_param(J6_ID, 'run_mode', 3)
-        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J6_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
-        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
-
-
-
         try:
             # Configure both motors while disabled, without resetting encoder zeros.
             for motor_id in (J5_ID, J6_ID):
@@ -158,7 +154,6 @@ def run_controller(samples):
             for motor_id in (J5_ID, J6_ID):
                 rs_client.enable(motor_id)
 
-            J5_angle_d, J6_angle_d,_,_ = cal.calculate(d_roll, d_pitch, 0, 0)
                 
             #core iteration here
             while True:
@@ -176,17 +171,52 @@ def run_controller(samples):
                     "desired_pitch_rad": d_pitch,
                     "desired_roll_rad": d_roll,
                 }
+                samples.append(sample)
 
-                J5_vel = rs_client.read_param(J5_ID, 'mechvel')
-                J6_vel = rs_client.read_param(J6_ID, 'mechvel')
-                _, _, j5_torque, j6_torque = cal.calculate(roll_angle, pitch_angle, tau_roll, tau_pitch)
-                J5_cur_pos = rs_client.read_param(J5_ID, 'mechpos')
-                J6_cur_pos = rs_client.read_param(J5_ID, 'mechpos')
+                #read the torque
+                current5 = float(rs_client.read_param(J5_ID, "iqf"))
+                current6 = float(rs_client.read_param(J6_ID, "iqf"))
+                if not all(math.isfinite(x) for x in (current5, current6)):
+                    raise ValueError("Non-finite motor current feedback")
+                sample["j5_estimated_torque_nm"] = current5 * MOTOR_KT
+                sample["j6_estimated_torque_nm"] = current6 * MOTOR_KT
 
-                # PD Controller on motors themselves
-                j5_torque = j5_torque + Kp5*(J5_angle_d - J5_cur_pos) + Kd5*J5_vel
-                j6_torque = j6_torque + Kp6*(J6_angle_d - J6_cur_pos) + Kd6*J6_vel
-                
+                have_velocity = previous_time is not None
+                if not have_velocity:
+                    j5_velocity = 0.0
+                    j6_velocity = 0.0
+                else:
+                    dt = now - previous_time
+                    if dt <= 0:
+                        raise ValueError("Non-positive feedback interval")
+                    j5_velocity = (j5_angle - previous_j5_angle) / dt
+                    j6_velocity = (j6_angle - previous_j6_angle) / dt
+
+                # Feedforward supports the CURRENT pose; PD corrects motor angles.
+                gravity_torque = mass * 9.81 * length * math.cos(
+                    pitch_angle + FOREARM_ELEVATION_RAD
+                )
+                _, _, j5_gravity, j6_gravity = cal.calculate(
+                    math.degrees(roll_angle), math.degrees(pitch_angle),
+                    0.0, gravity_torque,
+                )
+                j5_torque = j5_gravity + Kp5*(j5_angle_d - j5_angle) - Kd5*j5_velocity
+                j6_torque = j6_gravity + Kp6*(j6_angle_d - j6_angle) - Kd6*j6_velocity
+                # Apply the torque cap to feedforward PLUS feedback.
+                if not all(math.isfinite(x) for x in (j5_torque, j6_torque)):
+                    raise ValueError("Non-finite motor torque")
+                if max(abs(j5_torque), abs(j6_torque)) > cal.MOTOR_TORQUE_LIMIT:
+                    raise ValueError("Exceeded motor torque threshold")
+
+                roll_velocity, pitch_velocity = motor_angle_to_pitch_and_roll(
+                    j5_velocity, j6_velocity
+                )
+
+                previous_j5_angle = j5_angle
+                previous_j6_angle = j6_angle
+                previous_time = now
+
+                #new current for the motors based on the new torque
                 current5 = j5_torque / MOTOR_KT
                 current6 = j6_torque / MOTOR_KT
                 print(f"current6:{current6}")
@@ -205,17 +235,23 @@ def run_controller(samples):
                 at_target = (
                     abs(d_pitch - pitch_angle) < angle_tolerance
                     and abs(d_roll - roll_angle) < angle_tolerance
+                    and abs(pitch_velocity) < speed_tolerance
+                    and abs(roll_velocity) < speed_tolerance
                 )
-                if previous_time is not None and at_target:
+                if have_velocity and at_target:
                     if settle_since is None:
                         settle_since = now
                     elif now-settle_since >= 0.5:
-                        print("Target reached and settled for 0.5 seconds. Exiting.")
-                        break
+                        if not target_reported:
+                            print("Target reached and settled for 0.5 seconds.")
+                            target_reported = True
+                        if STOP_WHEN_SETTLED:
+                            break
                 else:
                     settle_since = None
+                    target_reported = False
 
-                time.sleep(0.1)
+                time.sleep(READ_INTERVAL)
         except KeyboardInterrupt:
             print("Stopping controller.")
         finally:

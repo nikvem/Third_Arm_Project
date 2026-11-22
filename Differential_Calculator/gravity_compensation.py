@@ -40,6 +40,7 @@ J6_ZERO_RAD = 0.0
 # and the load COM is on the hand axis, distance `length` from the pitch joint.
 FOREARM_ELEVATION_RAD = 0.0
 READ_INTERVAL = 0.1  # Seconds between pairs of reads.
+STOP_WHEN_SETTLED = False  # Keep supporting the load; Ctrl+C stops and plots.
 PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
@@ -123,6 +124,7 @@ def run_controller(samples):
         raise ValueError("MOTOR_KT must be finite and positive")
     if not math.isfinite(CURRENT_LIMIT) or CURRENT_LIMIT <= 0:
         raise ValueError("CURRENT_LIMIT must be finite and positive")
+    cal.calculate(math.degrees(d_roll), math.degrees(d_pitch), 0.0, 0.0)
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
             ) as bus:
@@ -130,23 +132,13 @@ def run_controller(samples):
         previous_pitch = None
         previous_time = None
         previous_roll = None
-        #conditioned to break from while loop when the angle is within 1 degree and the speed is slower than 2 degree/s
+        # Report settled only after both angle and velocity remain within tolerance.
         angle_tolerance = math.radians(1)   # Within 1 degree
         speed_tolerance = math.radians(2)   # Slower than 2 degree/second
         settle_since = None
+        target_reported = False
         first_sample_time = None
         
-        # Enable and zero motors
-        rs_client.write_param(J5_ID, 'run_mode', 3)
-        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J5_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
-        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
- 
-        rs_client.write_param(J6_ID, 'run_mode', 3)
-        rs_client.bus.send(rs_client._rs_msg(robstride.client.MotorMsg.ZeroPos, rs_client.host_can_id, J6_ID, [1, 0, 0, 0, 0, 0, 0, 0]))
-        rs_client.bus.recv(rs_client.recv_timeout) # consume the motor's reply so it doesn't confuse the next read/write
-
-
-
         try:
             # Configure both motors while disabled, without resetting encoder zeros.
             for motor_id in (J5_ID, J6_ID):
@@ -175,22 +167,26 @@ def run_controller(samples):
                     "desired_roll_rad": d_roll,
                 }
                 samples.append(sample)
-                if previous_time is None:
+                have_velocity = previous_time is not None
+                if not have_velocity:
                     pitch_velocity = 0.0
                     roll_velocity = 0.0
                 else:
                     dt = now - previous_time
+                    if dt <= 0:
+                        raise ValueError("Non-positive feedback interval")
                     pitch_velocity = (pitch_angle - previous_pitch) / dt
                     roll_velocity = (roll_angle - previous_roll) / dt
-                tau_pitch = mass* 9.81 * length *np.cos(pitch_angle) + kpp*(d_pitch - pitch_angle) - kdp*pitch_velocity
-                #tau_roll = kpr * (d_roll - roll_angle) - kdr * roll_velocity
-                tau_roll = 0
+                tau_pitch = mass* 9.81 * length *np.cos(pitch_angle + FOREARM_ELEVATION_RAD) + kpp*(d_pitch - pitch_angle) - kdp*pitch_velocity
+                tau_roll = kpr * (d_roll - roll_angle) - kdr * roll_velocity
                 previous_pitch = pitch_angle
                 previous_time = now
                 previous_roll = roll_angle
 
                 #converting back to j5_torque and j6_torque
-                _, _, j5_torque, j6_torque = cal.calculate(roll_angle, pitch_angle, tau_roll, tau_pitch)
+                _, _, j5_torque, j6_torque = cal.calculate(
+                    math.degrees(roll_angle), math.degrees(pitch_angle), tau_roll, tau_pitch
+                )
                 current5 = j5_torque / MOTOR_KT
                 current6 = j6_torque / MOTOR_KT
                 print(f"current6:{current6}")
@@ -212,16 +208,20 @@ def run_controller(samples):
                     and abs(pitch_velocity) < speed_tolerance
                     and abs(roll_velocity) < speed_tolerance
                 )
-                if previous_time is not None and at_target:
+                if have_velocity and at_target:
                     if settle_since is None:
                         settle_since = now
                     elif now-settle_since >= 0.5:
-                        print("Target reached and settled for 0.5 seconds. Exiting.")
-                        break
+                        if not target_reported:
+                            print("Target reached and settled for 0.5 seconds.")
+                            target_reported = True
+                        if STOP_WHEN_SETTLED:
+                            break
                 else:
                     settle_since = None
+                    target_reported = False
 
-                time.sleep(0.1)
+                time.sleep(READ_INTERVAL)
         except KeyboardInterrupt:
             print("Stopping controller.")
         finally:
