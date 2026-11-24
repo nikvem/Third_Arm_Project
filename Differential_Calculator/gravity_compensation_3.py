@@ -7,8 +7,7 @@ import can
 import robstride
 from datetime import datetime
 from pathlib import Path
-import Client
-
+from rs_client import Client
 
 ####################################
  
@@ -133,7 +132,7 @@ def run_controller(samples):
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
             ) as bus:
-        rs_client = robstride.Client(bus, host_can_id=HOST_CAN_ID)
+        rs_client = Client(bus, host_can_id=HOST_CAN_ID)
         previous_j5_angle = None
         previous_j6_angle = None
         previous_time = None
@@ -178,7 +177,7 @@ def run_controller(samples):
                 current6 = float(rs_client.read_param(J6_ID, "iqf"))
 
                 # Check for torque safety limit
-                if (current5 >= CURRENT_LIMIT or current6 >= CURRENT_LIMIT):
+                if (abs(current5) >= CURRENT_LIMIT or abs(current6) >= CURRENT_LIMIT):
                     raise ValueError("EXCEEDED TORQUE LIMITS")
                 
                 if not all(math.isfinite(x) for x in (current5, current6)):
