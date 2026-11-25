@@ -51,7 +51,7 @@ d_pitch = np.pi/4 # desired pitch in radian
 length = 6.25 * 0.0254 # m
 Kp5 = 0.5
 Kd5 = 0.1
-Kp6 = 0.1
+Kp6 = 0.5
 Kd6 = 0.1
 
 

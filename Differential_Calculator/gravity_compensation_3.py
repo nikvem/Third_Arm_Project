@@ -46,13 +46,13 @@ PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
 mass = 0.8 # kg
-d_roll = 0 # desired roll in radian
+d_roll = np.pi/2 # desired roll in radian
 d_pitch = np.pi/4 # desired pitch in radian
 length = 6.25 * 0.0254 # m
-Kp5 = 0.1
-Kd5 = 0.1
-Kp6 = 0.1
-Kd6 = 0.1
+Kp5 = 1.8
+Kd5 = 0.15
+Kp6 = 1.8
+Kd6 = 0.15
 
 
 
@@ -92,9 +92,9 @@ def plot_tuning_run(samples):
         2, 1, sharex=True, figsize=(10, 7), constrained_layout=True
     )
     try:
-        for motor, color in (("j5", "tab:blue"), ("j6", "tab:orange")):
+        for motor, color, kp, kd in (("j5", "tab:blue", Kp5, Kd5), ("j6", "tab:orange", Kp6, Kd6)):
             torque_ax.plot(times, [s[f"{motor}_commanded_torque_nm"] for s in samples],
-                            label=f"{motor.upper()} commanded", color=color,
+                            label=f"{motor.upper()} commanded (Kp={kp:g}, Kd={kd:g})", color=color,
                             marker=".", markersize=3)
         torque_ax.set_ylabel("Torque (N·m)")
         torque_ax.set_title("PD tuning — recorded commands and angles")
@@ -144,14 +144,17 @@ def run_controller(samples):
         first_sample_time = None
         
         try:
-            # Configure both motors while disabled, without resetting encoder zeros.
+            # Enabling and zeroing motors
             for motor_id in (J5_ID, J6_ID):
                 rs_client.disable(motor_id)
             for motor_id in (J5_ID, J6_ID):
                 rs_client.write_param(motor_id, 'run_mode', 0)
+            for motor_id in (J5_ID, J6_ID):
+                rs_client.zero_pos(motor_id)
             read_motor_angles(rs_client)  # Check feedback before enabling.
             for motor_id in (J5_ID, J6_ID):
                 rs_client.enable(motor_id)
+                                    
 
                 
             #core iteration here
@@ -176,9 +179,6 @@ def run_controller(samples):
                 current5 = float(rs_client.read_param(J5_ID, "iqf"))
                 current6 = float(rs_client.read_param(J6_ID, "iqf"))
 
-                # Check for torque safety limit
-                if (abs(current5) >= CURRENT_LIMIT or abs(current6) >= CURRENT_LIMIT):
-                    raise ValueError("EXCEEDED TORQUE LIMITS")
                 
                 if not all(math.isfinite(x) for x in (current5, current6)):
                     raise ValueError("Non-finite motor current feedback")
@@ -206,7 +206,7 @@ def run_controller(samples):
                 # Send position, velocity, PD gains, and gravity feedforward torque.
                 j5_feedback = rs_client.control(
                     motor_id=J5_ID,
-                    torque=j5_gravity,
+                    torque=j5_gravity*1.2,
                     mech_position=j5_angle_d,
                     speed=0.0,
                     kp=Kp5,
@@ -215,7 +215,7 @@ def run_controller(samples):
 
                 j6_feedback = rs_client.control(
                     motor_id=J6_ID,
-                    torque=j6_gravity,
+                    torque=j6_gravity*1.2,
                     mech_position=j6_angle_d,
                     speed=0.0,
                     kp=Kp6,
@@ -233,7 +233,8 @@ def run_controller(samples):
                 if not all(math.isfinite(x) for x in (j5_torque, j6_torque)):
                     raise ValueError("Non-finite motor torque")
                 if max(abs(j5_torque), abs(j6_torque)) > cal.MOTOR_TORQUE_LIMIT:
-                    raise ValueError("Exceeded motor torque threshold")
+                    j5_torque = cal.MOTOR_TORQUE_LIMIT
+                    j6_torque = cal.MOTOR_TORQUE_LIMIT
 
                 roll_velocity, pitch_velocity = motor_angle_to_pitch_and_roll(
                     j5_velocity, j6_velocity

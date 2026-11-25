@@ -8,6 +8,8 @@ import can
 import robstride
 from datetime import datetime
 from pathlib import Path
+from rs_client import Client
+
 
 ####################################
  
@@ -128,7 +130,7 @@ def run_controller(samples):
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
             ) as bus:
-        rs_client = robstride.Client(bus, host_can_id=HOST_CAN_ID)
+        rs_client = Client(bus, host_can_id=HOST_CAN_ID)
         previous_pitch = None
         previous_time = None
         previous_roll = None
@@ -140,12 +142,13 @@ def run_controller(samples):
         first_sample_time = None
         
         try:
-            # Configure both motors while disabled, without resetting encoder zeros.
+            # Enable and zero motors
             for motor_id in (J5_ID, J6_ID):
                 rs_client.disable(motor_id)
             for motor_id in (J5_ID, J6_ID):
-                rs_client.write_param(motor_id, 'run_mode', 3)
-                rs_client.write_param(motor_id, 'iq_ref', 0.0)
+                rs_client.write_param(motor_id, 'run_mode', 0)
+            for motor_id in (J5_ID, J6_ID):
+                rs_client.zero_pos(motor_id)
             read_motor_angles(rs_client)  # Check feedback before enabling.
             for motor_id in (J5_ID, J6_ID):
                 rs_client.enable(motor_id)
