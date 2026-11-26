@@ -1,4 +1,5 @@
 import sys
+import signal
 import numpy as np
 import math
 import calculator as cal
@@ -17,6 +18,12 @@ from rs_client import Client
 # 3. sudo ip link set can0 down
 # 4. sudo ip link set can0 up type can bitrate 1000000
 
+
+
+# sudo ip link set can0 down
+# sudo ip link set can0 type can bitrate 1000000
+# sudo ip link set can0 txqueuelen 1000
+# sudo ip link set can0 up
 ####################################
 
 """
@@ -39,20 +46,20 @@ J6_ZERO_RAD = 0.0
 # This simple gravity model assumes the pitch motion is in a vertical plane
 # and the load COM is on the hand axis, distance `length` from the pitch joint.
 FOREARM_ELEVATION_RAD = 0.0
-READ_INTERVAL = 0.1  # Seconds between pairs of reads.
+READ_INTERVAL = 0.01  # Target sample period in seconds (100 Hz), including CAN work.
 STOP_WHEN_SETTLED = False  # Keep supporting the load; Ctrl+C stops and plots.
 PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
 
 mass = 0.8 # kg
-d_roll = np.pi/2 # desired roll in radian
+d_roll = np.pi/3 # desired roll in radian
 d_pitch = np.pi/4 # desired pitch in radian
 length = 6.25 * 0.0254 # m
-Kp5 = 1.8
-Kd5 = 0.15
-Kp6 = 1.8
-Kd6 = 0.15
+Kp5 = 1.95
+Kd5 = 0.185
+Kp6 = 2
+Kd6 = 0.195
 
 
 
@@ -75,8 +82,8 @@ def motor_angle_to_pitch_and_roll(j5_angle, j6_angle):
 def plot_tuning_run(samples):
     """Save and display the plot after the CAN bus has closed.
 
-    Torque is the commanded current multiplied by MOTOR_KT, not measured
-    torque. A NaN marks a command that did not complete in that iteration.
+    Angle samples are recorded before torque reads and control commands, so
+    interrupted iterations can still be plotted. NaN marks missing torque data.
     """
     if not samples:
         print("No PD samples recorded; nothing to plot.")
@@ -97,7 +104,7 @@ def plot_tuning_run(samples):
                             label=f"{motor.upper()} commanded (Kp={kp:g}, Kd={kd:g})", color=color,
                             marker=".", markersize=3)
         torque_ax.set_ylabel("Torque (N·m)")
-        torque_ax.set_title("PD tuning — recorded commands and angles")
+        torque_ax.set_title(f"PD tuning — recorded commands and angles\nPayload mass = {mass:g} kg")
         torque_ax.legend()
         torque_ax.grid(True, alpha=0.3)
 
@@ -107,9 +114,15 @@ def plot_tuning_run(samples):
                         marker=".", markersize=3)
             angle_ax.plot(times, [math.degrees(s[f"desired_{joint}_rad"]) for s in samples],
                         label=f"{joint.capitalize()} desired", color=color, linestyle="--")
+        for motor, color in (("j5", "tab:green"), ("j6", "tab:red")):
+            angle_ax.plot(times, [math.degrees(s[f"{motor}_angle_rad"]) for s in samples],
+                          label=f"{motor.upper()} measured", color=color,
+                          marker=".", markersize=3)
+            angle_ax.plot(times, [math.degrees(s[f"desired_{motor}_rad"]) for s in samples],
+                          label=f"{motor.upper()} desired", color=color, linestyle="--")
         angle_ax.set_ylabel("Angle (deg)")
         angle_ax.set_xlabel("Time since first sample (s)")
-        angle_ax.legend()
+        angle_ax.legend(ncol=2)
         angle_ax.grid(True, alpha=0.3)
         png_path = PLOT_DIRECTORY / f"{stem}.png"
         fig.savefig(png_path, dpi=160)
@@ -120,6 +133,8 @@ def plot_tuning_run(samples):
 
 
 def run_controller(samples):
+    if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
+        raise ValueError("READ_INTERVAL must be finite and positive")
     if not math.isfinite(MOTOR_KT) or MOTOR_KT <= 0:
         raise ValueError("MOTOR_KT must be finite and positive")
     if not math.isfinite(CURRENT_LIMIT) or CURRENT_LIMIT <= 0:
@@ -128,6 +143,8 @@ def run_controller(samples):
         math.degrees(d_roll), math.degrees(d_pitch), 0.0, 0.0
     )
     j5_angle_d = math.radians(j5_desired_deg)
+    print(math.degrees(d_roll))
+    print(math.degrees(d_pitch))
     j6_angle_d = math.radians(j6_desired_deg)
     with can.Bus(
                 interface=INTERFACE, channel=CHANNEL, bitrate=BITRATE
@@ -159,6 +176,7 @@ def run_controller(samples):
                 
             #core iteration here
             while True:
+                iteration_start = time.monotonic()
                 j5_angle, j6_angle = read_motor_angles(rs_client)
                 now = time.monotonic()
                 roll_angle, pitch_angle = motor_angle_to_pitch_and_roll(j5_angle,j6_angle)
@@ -172,6 +190,10 @@ def run_controller(samples):
                     "roll_rad": roll_angle,
                     "desired_pitch_rad": d_pitch,
                     "desired_roll_rad": d_roll,
+                    "j5_angle_rad": j5_angle,
+                    "j6_angle_rad": j6_angle,
+                    "desired_j5_rad": j5_angle_d,
+                    "desired_j6_rad": j6_angle_d,
                 }
                 samples.append(sample)
 
@@ -206,7 +228,7 @@ def run_controller(samples):
                 # Send position, velocity, PD gains, and gravity feedforward torque.
                 j5_feedback = rs_client.control(
                     motor_id=J5_ID,
-                    torque=j5_gravity*1.2,
+                    torque=j5_gravity*1.1,
                     mech_position=j5_angle_d,
                     speed=0.0,
                     kp=Kp5,
@@ -215,7 +237,7 @@ def run_controller(samples):
 
                 j6_feedback = rs_client.control(
                     motor_id=J6_ID,
-                    torque=j6_gravity*1.2,
+                    torque=j6_gravity*1.1,
                     mech_position=j6_angle_d,
                     speed=0.0,
                     kp=Kp6,
@@ -269,7 +291,9 @@ def run_controller(samples):
                     settle_since = None
                     target_reported = False
 
-                time.sleep(READ_INTERVAL)
+                remaining_time = READ_INTERVAL - (time.monotonic() - iteration_start)
+                if remaining_time > 0:
+                    time.sleep(remaining_time)
         except KeyboardInterrupt:
             print("Stopping controller.")
         finally:
@@ -281,12 +305,41 @@ def run_controller(samples):
                 except Exception as error:
                     print(f"Motor {motor_id}: disable failed: {error}", file=sys.stderr)
         
+def print_final_errors(samples):
+    """Report signed errors from the last recorded angle sample, in degrees."""
+    if not samples:
+        print("No angle samples recorded; final errors are unavailable.")
+        return
+
+    final_sample = samples[-1]
+    print(f"\nFinal angle errors at t = {final_sample['time_s']:.3f} s (desired - measured)")
+    print(f"{'Axis':<8}{'Desired (deg)':>16}{'Measured (deg)':>17}{'Error (deg)':>15}")
+    for label, measured_key, desired_key in (
+        ("J5", "j5_angle_rad", "desired_j5_rad"),
+        ("J6", "j6_angle_rad", "desired_j6_rad"),
+        ("Roll", "roll_rad", "desired_roll_rad"),
+        ("Pitch", "pitch_rad", "desired_pitch_rad"),
+    ):
+        desired = math.degrees(final_sample[desired_key])
+        measured = math.degrees(final_sample[measured_key])
+        error = desired - measured
+        print(f"{label:<8}{desired:>16.3f}{measured:>17.3f}{error:>+15.3f}")
+
+
+def handle_termination(signum, frame):
+    """Let SIGTERM use the controller's Ctrl+C cleanup and reporting path."""
+    raise KeyboardInterrupt
+
+
 def main():
     samples = []
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, handle_termination)
     try:
         run_controller(samples)
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         # Runs on settled exit, Ctrl+C, and errors, after motor cleanup/bus close.
+        print_final_errors(samples)
         # A plotting failure must not hide the original controller exception.
         try:
             plot_tuning_run(samples)
