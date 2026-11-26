@@ -60,6 +60,7 @@ Kp5 = 1.95
 Kd5 = 0.19
 Kp6 = 2
 Kd6 = 0.195
+ramp_time = 0.125
 
 
 
@@ -225,24 +226,44 @@ def run_controller(samples):
                     0.0, gravity_torque,
                 )
 
-                # Send position, velocity, PD gains, and gravity feedforward torque.
-                j5_feedback = rs_client.control(
-                    motor_id=J5_ID,
-                    torque=j5_gravity*1.2,
-                    mech_position=j5_angle_d,
-                    speed=0.0,
-                    kp=Kp5,
-                    kd=Kd5
-                )
 
-                j6_feedback = rs_client.control(
-                    motor_id=J6_ID,
-                    torque=j6_gravity*1.2,
-                    mech_position=j6_angle_d,
-                    speed=0.0,
-                    kp=Kp6,
-                    kd=Kd6
-                )
+                if 0 < now <= ramp_time:
+                    # Send position, velocity, PD gains, and gravity feedforward torque.
+                    j5_feedback = rs_client.control(
+                        motor_id=J5_ID,
+                        torque=j5_gravity*1.2,
+                        mech_position=j5_angle_d * (now / ramp_time),
+                        speed=0.0,
+                        kp=Kp5,
+                        kd=Kd5
+                    )
+
+                    j6_feedback = rs_client.control(
+                        motor_id=J6_ID,
+                        torque=j6_gravity*1.2,
+                        mech_position=j6_angle_d * (now / ramp_time),
+                        speed=0.0,
+                        kp=Kp6,
+                        kd=Kd6
+                    )
+                elif now > ramp_time:
+                    j5_feedback = rs_client.control(
+                        motor_id=J5_ID,
+                        torque=j5_gravity,
+                        mech_position=j5_angle_d,
+                        speed=0.0,
+                        kp=Kp5,
+                        kd=Kd5
+                    )
+
+                    j6_feedback = rs_client.control(
+                        motor_id=J6_ID,
+                        torque=j6_gravity,
+                        mech_position=j6_angle_d,
+                        speed=0.0,
+                        kp=Kp6,
+                        kd=Kd6
+                    )
 
                 # Extract motor feedback.
                 j5_velocity = j5_feedback.velocity
