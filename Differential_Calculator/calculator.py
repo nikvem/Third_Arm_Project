@@ -18,10 +18,10 @@ def calculate(roll, pitch, roll_torque, pitch_torque):
     if not all(math.isfinite(x) for x in (roll, pitch, roll_torque, pitch_torque)):
         raise ValueError("Enter finite numbers only.")
 
-    if not -90 <= roll <= 90 or not -90 <= pitch <= 90:
-        print(f"roll:{roll}")
-        print(f"pitch:{pitch}")
-        raise ValueError("Roll and pitch must each be between -90 and 90 degrees.")
+    # if not -90 <= roll <= 90 or not -90 <= pitch <= 90:
+    #     print(f"roll:{roll}")
+    #     print(f"pitch:{pitch}")
+    #     raise ValueError("Roll and pitch must each be between -90 and 90 degrees.")
 
     # Convert the wrist angles into motor angles, including the pulley ratio
     j5_angle = PULLEY_RATIO * (roll + pitch)

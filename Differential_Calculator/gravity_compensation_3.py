@@ -53,11 +53,11 @@ PLOT_DIRECTORY = Path(__file__).resolve().parent / "pd_tuning_results"
 
 
 mass = 0.8 # kg
-d_roll = np.pi/3 # desired roll in radian
-d_pitch = np.pi/4 # desired pitch in radian
+d_roll = np.pi/2 # desired roll in radian
+d_pitch = np.pi/2 # desired pitch in radian
 length = 6.25 * 0.0254 # m
 Kp5 = 1.95
-Kd5 = 0.185
+Kd5 = 0.19
 Kp6 = 2
 Kd6 = 0.195
 
@@ -228,7 +228,7 @@ def run_controller(samples):
                 # Send position, velocity, PD gains, and gravity feedforward torque.
                 j5_feedback = rs_client.control(
                     motor_id=J5_ID,
-                    torque=j5_gravity*1.1,
+                    torque=j5_gravity*1.2,
                     mech_position=j5_angle_d,
                     speed=0.0,
                     kp=Kp5,
@@ -237,7 +237,7 @@ def run_controller(samples):
 
                 j6_feedback = rs_client.control(
                     motor_id=J6_ID,
-                    torque=j6_gravity*1.1,
+                    torque=j6_gravity*1.2,
                     mech_position=j6_angle_d,
                     speed=0.0,
                     kp=Kp6,
