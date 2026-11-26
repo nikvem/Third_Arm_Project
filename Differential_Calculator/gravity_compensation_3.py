@@ -56,11 +56,11 @@ mass = 0.8 # kg
 d_roll = np.pi/2 # desired roll in radian
 d_pitch = np.pi/2 # desired pitch in radian
 length = 6.25 * 0.0254 # m
-Kp5 = 1.95
-Kd5 = 0.19
+Kp5 = 2.15
+Kd5 = 0.195
 Kp6 = 2
 Kd6 = 0.195
-ramp_time = 0.125
+ramp_time = 0.5  # Seconds to ramp from zero to the final target; 0 sends the target immediately.
 
 
 
@@ -105,7 +105,7 @@ def plot_tuning_run(samples):
                             label=f"{motor.upper()} commanded (Kp={kp:g}, Kd={kd:g})", color=color,
                             marker=".", markersize=3)
         torque_ax.set_ylabel("Torque (N·m)")
-        torque_ax.set_title(f"PD tuning — recorded commands and angles\nPayload mass = {mass:g} kg")
+        torque_ax.set_title(f"PD tuning — recorded commands and angles\nPayload mass = {mass:g} kg, ramp time = {ramp_time:g} s")
         torque_ax.legend()
         torque_ax.grid(True, alpha=0.3)
 
@@ -113,14 +113,14 @@ def plot_tuning_run(samples):
             angle_ax.plot(times, [math.degrees(s[f"{joint}_rad"]) for s in samples],
                         label=f"{joint.capitalize()} measured", color=color,
                         marker=".", markersize=3)
-            angle_ax.plot(times, [math.degrees(s[f"desired_{joint}_rad"]) for s in samples],
-                        label=f"{joint.capitalize()} desired", color=color, linestyle="--")
+            angle_ax.plot(times, [math.degrees(s.get(f"reference_{joint}_rad", s[f"desired_{joint}_rad"])) for s in samples],
+                        label=f"{joint.capitalize()} reference", color=color, linestyle="--")
         for motor, color in (("j5", "tab:green"), ("j6", "tab:red")):
             angle_ax.plot(times, [math.degrees(s[f"{motor}_angle_rad"]) for s in samples],
                           label=f"{motor.upper()} measured", color=color,
                           marker=".", markersize=3)
-            angle_ax.plot(times, [math.degrees(s[f"desired_{motor}_rad"]) for s in samples],
-                          label=f"{motor.upper()} desired", color=color, linestyle="--")
+            angle_ax.plot(times, [math.degrees(s.get(f"reference_{motor}_rad", s[f"desired_{motor}_rad"])) for s in samples],
+                          label=f"{motor.upper()} reference", color=color, linestyle="--")
         angle_ax.set_ylabel("Angle (deg)")
         angle_ax.set_xlabel("Time since first sample (s)")
         angle_ax.legend(ncol=2)
@@ -134,6 +134,8 @@ def plot_tuning_run(samples):
 
 
 def run_controller(samples):
+    if not math.isfinite(ramp_time) or ramp_time < 0:
+        raise ValueError("ramp_time must be finite and nonnegative")
     if not math.isfinite(READ_INTERVAL) or READ_INTERVAL <= 0:
         raise ValueError("READ_INTERVAL must be finite and positive")
     if not math.isfinite(MOTOR_KT) or MOTOR_KT <= 0:
@@ -183,8 +185,18 @@ def run_controller(samples):
                 roll_angle, pitch_angle = motor_angle_to_pitch_and_roll(j5_angle,j6_angle)
                 if first_sample_time is None:
                     first_sample_time = now
+                elapsed = now - first_sample_time
+                if elapsed < ramp_time:
+                    ramp_fraction = elapsed / ramp_time
+                else:
+                    ramp_fraction = 1.0
+                j5_reference = j5_angle_d * ramp_fraction
+                j6_reference = j6_angle_d * ramp_fraction
+                roll_reference, pitch_reference = motor_angle_to_pitch_and_roll(
+                    j5_reference, j6_reference
+                )
                 sample = {
-                    "time_s": now - first_sample_time,
+                    "time_s": elapsed,
                     "j5_commanded_torque_nm": math.nan,
                     "j6_commanded_torque_nm": math.nan,
                     "pitch_rad": pitch_angle,
@@ -195,6 +207,10 @@ def run_controller(samples):
                     "j6_angle_rad": j6_angle,
                     "desired_j5_rad": j5_angle_d,
                     "desired_j6_rad": j6_angle_d,
+                    "reference_j5_rad": j5_reference,
+                    "reference_j6_rad": j6_reference,
+                    "reference_roll_rad": roll_reference,
+                    "reference_pitch_rad": pitch_reference,
                 }
                 samples.append(sample)
 
@@ -226,44 +242,25 @@ def run_controller(samples):
                     0.0, gravity_torque,
                 )
 
+                # Preserve the configured gravity boost during the ramp.
+                gravity_scale = 1.2 if ramp_fraction < 1.0 else 1.0
+                j5_feedback = rs_client.control(
+                    motor_id=J5_ID,
+                    torque=j5_gravity * gravity_scale,
+                    mech_position=j5_reference + J5_ZERO_RAD,
+                    speed=0.0,
+                    kp=Kp5,
+                    kd=Kd5
+                )
 
-                if 0 < now <= ramp_time:
-                    # Send position, velocity, PD gains, and gravity feedforward torque.
-                    j5_feedback = rs_client.control(
-                        motor_id=J5_ID,
-                        torque=j5_gravity*1.2,
-                        mech_position=j5_angle_d * (now / ramp_time),
-                        speed=0.0,
-                        kp=Kp5,
-                        kd=Kd5
-                    )
-
-                    j6_feedback = rs_client.control(
-                        motor_id=J6_ID,
-                        torque=j6_gravity*1.2,
-                        mech_position=j6_angle_d * (now / ramp_time),
-                        speed=0.0,
-                        kp=Kp6,
-                        kd=Kd6
-                    )
-                elif now > ramp_time:
-                    j5_feedback = rs_client.control(
-                        motor_id=J5_ID,
-                        torque=j5_gravity,
-                        mech_position=j5_angle_d,
-                        speed=0.0,
-                        kp=Kp5,
-                        kd=Kd5
-                    )
-
-                    j6_feedback = rs_client.control(
-                        motor_id=J6_ID,
-                        torque=j6_gravity,
-                        mech_position=j6_angle_d,
-                        speed=0.0,
-                        kp=Kp6,
-                        kd=Kd6
-                    )
+                j6_feedback = rs_client.control(
+                    motor_id=J6_ID,
+                    torque=j6_gravity * gravity_scale,
+                    mech_position=j6_reference + J6_ZERO_RAD,
+                    speed=0.0,
+                    kp=Kp6,
+                    kd=Kd6
+                )
 
                 # Extract motor feedback.
                 j5_velocity = j5_feedback.velocity
@@ -294,7 +291,8 @@ def run_controller(samples):
                 # Check if the system is at the target angles and velocities
 
                 at_target = (
-                    abs(d_pitch - pitch_angle) < angle_tolerance
+                    ramp_fraction >= 1.0
+                    and abs(d_pitch - pitch_angle) < angle_tolerance
                     and abs(d_roll - roll_angle) < angle_tolerance
                     and abs(pitch_velocity) < speed_tolerance
                     and abs(roll_velocity) < speed_tolerance
